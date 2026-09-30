@@ -22,8 +22,8 @@ import sys
 
 import numpy as np
 
-from src.config import DATASET_META_FILE, RAW_PARQUET, SEED, set_seeds
-from src.dataset import load_raw, summarize
+from eda.src.config import DATASET_META_FILE, RAW_PARQUET, SEED, set_seeds
+from eda.src.dataset import load_raw, summarize
 
 set_seeds(SEED)
 
