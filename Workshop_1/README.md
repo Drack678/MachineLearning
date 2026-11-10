@@ -4,7 +4,9 @@ Downloading, exploring and preprocessing the `flwrlabs/shakespeare` dataset, wit
 avoids data leakage.
 
 **Course:** Machine Learning — Universidad Distrital
-**Status:** Steps 1–3 done (download, EDA, cleaning + split). Models are out of scope; see
+**Status:** Steps 1–3 done (download, EDA, cleaning + split), plus the baseline
+models in `src/baselines.py` (majority class, n-gram lookup table, logistic
+regression, Naive Bayes, random forest). See
 [Out of scope / Next steps](#out-of-scope--next-steps).
 
 ---
@@ -341,14 +343,19 @@ assumed to help just because the dataset is large.
 
 Not done at this stage, on purpose:
 
-- [ ] **`src/features.py` — turning `x` into model input.** One-hot or integer encoding, n-gram
-      counts, embedding-ready arrays. `data/vocab.json` and the `y_id` column are the starting
-      point.
-- [ ] **`src/baselines.py` — baseline models.** At least: always predict the most frequent class
-      (known score: **18.74%**), a model that looks up the previous character (the k=1 entropy of
-      3.5288 bits limits how well it can do), and logistic regression on the last few characters.
-- [ ] **Training and evaluation.** Report macro F1, top-k accuracy, per-class recall and
-      cross-entropy as well as accuracy, for the reasons in §5.
+- [ ] **`src/features.py` — turning `x` into model input.** Partly covered by
+      `src/baselines.py` (one-hot posicional + n-gramas de caracteres). A
+      separate module is still useful if the feature stage grows.
+- [x] **`src/baselines.py` — baseline models.** Implemented: majority class,
+      an n-gram lookup table with backoff (built on the full training split),
+      logistic regression and Naive Bayes over one-hot + character n-grams,
+      and a random forest over the one-hot features. Metrics include
+      accuracy, macro/weighted precision-recall-F1, balanced accuracy,
+      macro AUC-ROC, log-loss in bits (vs. the 4.5002-bit entropy) and
+      top-3 accuracy.
+- [ ] **Training and evaluation.** Cross-entropy per-class reporting and
+      top-k beyond k=3 are still open.
 - [ ] **Implementing the augmentation** described in §8.
-- [ ] **The PDF report.** Sections 5 and 6 of this README, plus the figures in `reports/figures/`,
-      are the material to write it from.
+- [ ] **The PDF report.** Sections 5 and 6 of this README, plus the figures in
+      `reports/figures/`, are the material to write it from. Baseline results
+      live in `checkpoints/baselines_summary.csv` and in `runs/`.

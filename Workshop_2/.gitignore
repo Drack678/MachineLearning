@@ -1,0 +1,11 @@
+# Entorno virtual
+.venv/
+
+# Artefactos de entrenamiento (Fase 4)
+runs/
+checkpoints/
+train.log
+
+# Python
+__pycache__/
+*.pyc
