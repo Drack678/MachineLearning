@@ -5,6 +5,7 @@
 runs/
 checkpoints/
 train.log
+tensorboard.log
 
 # Python
 __pycache__/

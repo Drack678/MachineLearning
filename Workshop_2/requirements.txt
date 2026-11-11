@@ -13,4 +13,4 @@ matplotlib==3.11.2       # plots
 ipykernel==7.3.0         # running notebooks
 nbconvert==7.17.1        # notebook processing
 torch==2.14.1            # PyTorch framework for Deep Learning
-tensorboard==2.18.0      # Training monitoring and logging
+tensorboard==2.21.0      # Training monitoring and logging (2.18 rompe en Python 3.14: usa imghdr, eliminado en 3.13)
