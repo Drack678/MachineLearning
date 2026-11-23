@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shakespeare-ml-shared"
+version = "0.1.0"
+description = "Paquete compartido para los Workshops 1-5 de Machine Learning (Shakespeare Next-Character Prediction)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "scikit-learn",
+    "torch",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "ty>=0.0.1",
+]
+tune = [
+    "optuna>=4.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["shared*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = [
+    "S101",  # assert permitido en tests y validaciones internas
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S311"]
+"shared/device.py" = ["S311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"

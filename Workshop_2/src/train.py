@@ -1,347 +1,494 @@
-"""Fase 4: bucle de entrenamiento del ShakespeareTransformer.
-
-Ejemplos:
-    python src/train.py --epochs 2                                       # entrenamiento completo
-    python src/train.py --epochs 1 --max_train_batches 20 --max_val_batches 5   # smoke test
-    python -m src.train --epochs 2                                       # equivalente al primero
-"""
+"""Entrenamiento autorregresivo multi-token del Transformer de Workshop 2 (Fase 2)."""
 
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import random
+import math
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 
-# Bootstrap de rutas: permite ejecutar tanto 'python src/train.py' (donde
-# sys.path[0] sería src/) como 'python -m src.train' desde la raíz.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from src.config import (
-    BATCH_SIZE,
-    DATA_DIR,
-    DIM_FFW,
-    D_MODEL,
-    DROPOUT,
-    LEARNING_RATE,
-    NHEAD,
-    NUM_EPOCHS,
-    NUM_LAYERS,
-    VOCAB_SIZE,
-    WINDOW_SIZE,
+from shared.checkpoints import save_checkpoint
+from shared.config import SEED, WINDOW_SIZE, to_relative_path
+from shared.data import build_contiguous_blocks, load_encoded_split, read_vocab
+from shared.device import (
+    DEVICE_CHOICES,
+    PROFILE_CHOICES,
+    amp_context,
+    clip_grad_norm_safe,
+    cpu_state_dict,
+    dataloader_kwargs,
+    get_hardware_profile,
+    resolve_device,
+    seed_everything,
 )
-from src.dataset import load_split
-from src.model import ShakespeareTransformer
+from shared.metrics import (
+    apply_logit_adjustment,
+    compute_multiclass_metrics,
+    fit_logit_adjustment_tau,
+)
+from shared.models import CharTransformer, build_warmup_cosine_scheduler, count_parameters
 
-# Rutas de salida del entrenamiento (siempre en la raíz del proyecto)
-RUNS_DIR = PROJECT_ROOT / "runs"
-CHECKPOINTS_DIR = PROJECT_ROOT / "checkpoints"
-BEST_MODEL_PATH = CHECKPOINTS_DIR / "model_best.pt"
+CHECKPOINTS_DIR = ROOT / "checkpoints"
+BEST_CHECKPOINT = CHECKPOINTS_DIR / "model_best.pt"
+RUNS_DIR = ROOT / "runs"
+REPORTS_DIR = ROOT / "reports"
+FIGURES_DIR = REPORTS_DIR / "figures"
 
-
-class ShakespeareDataset(Dataset):
-    """
-    Clase personalizada de PyTorch para leer tus datos de Shakespeare.
-    Convierte las cadenas de 80 caracteres en listas de 80 números enteros
-    y el target y_id en un escalar 'long' (el tipo que espera CrossEntropyLoss).
-    """
-
-    def __init__(self, split_name):
-        # 1. Cargamos el DataFrame (train, val o test) usando tu función existente
-        self.df = load_split(split_name)
-
-        # 2. Cargamos el diccionario de vocabulario para traducir letras a números
-        vocab_path = DATA_DIR / "vocab.json"
-        with open(vocab_path, "r", encoding="utf-8") as f:
-            self.vocab = json.load(f)
-
-        self.stoi = self.vocab["stoi"]          # Diccionario: Letra -> Número
-        self.unk_idx = self.vocab["unk_index"]  # Índice para caracteres desconocidos (0)
-
-        # 3. Extraemos las columnas como arrays de numpy: llamar df.iloc fila por
-        #    fila es muy lento con millones de ejemplos.
-        self._texts = self.df["x"].to_numpy()
-        self._targets = self.df["y_id"].to_numpy().astype(np.int64)
-
-    def __len__(self):
-        # Le dice a PyTorch cuántas filas tiene este split
-        return len(self._texts)
-
-    def __getitem__(self, idx):
-        # 1. Obtenemos el texto de 80 caracteres (x) y el target numérico (y_id)
-        text_x = self._texts[idx]
-        y_target = self._targets[idx]
-
-        # 2. Convertimos cada una de las 80 letras en su número correspondiente
-        #    Si una letra no existe en el vocabulario, usa el token <UNK> (0)
-        x_encoded = [self.stoi.get(char, self.unk_idx) for char in text_x]
-
-        # 3. Retornamos los tensores de PyTorch (tipo 'long' para índices enteros)
-        return (
-            torch.tensor(x_encoded, dtype=torch.long),
-            torch.tensor(int(y_target), dtype=torch.long),
-        )
+SEARCH_LRS = (1.5e-3, 1e-3, 5e-4)
+SEARCH_REG = (
+    {"dropout": 0.1, "weight_decay": 0.05},
+    {"dropout": 0.2, "weight_decay": 0.10},
+)
 
 
-# ---------------------------------------------------------------------------
-# Utilidades de entorno
-# ---------------------------------------------------------------------------
-
-def set_seed(seed: int) -> None:
-    """Fija las semillas de random, numpy y torch para reproducibilidad."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def select_device(requested: str) -> torch.device:
-    """Selecciona el dispositivo de cómputo: cuda > mps > cpu (si se pide 'auto')."""
-    if requested != "auto":
-        return torch.device(requested)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def make_loaders(batch_size: int, num_workers: int, seed: int):
-    """Crea los DataLoaders de train y val con barajado reproducible."""
-    print("Preparando los DataLoaders...", flush=True)
-    train_dataset = ShakespeareDataset("train")
-    val_dataset = ShakespeareDataset("val")
-
-    # Generador con semilla para que el orden del shuffle sea reproducible
-    generator = torch.Generator()
-    generator.manual_seed(seed)
-
-    pin_memory = torch.cuda.is_available()  # solo tiene sentido en GPU
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,  # mezcla para que el modelo no memorice el orden
-        generator=generator,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-    )
-    return train_loader, val_loader
-
-
-
-# ---------------------------------------------------------------------------
-# Bucles de entrenamiento y validación
-# ---------------------------------------------------------------------------
-
-def train_one_epoch(model, loader, criterion, optimizer, device, writer,
-                    epoch: int, global_step: int, max_batches: int = 0):
-    """Un pase completo de entrenamiento sobre el loader.
-
-    Devuelve (loss_media_ponderada, global_step_actualizado).
-    `max_batches > 0` corta el loop antes de tiempo (solo para smoke tests).
-    """
-    model.train()
-    running_loss = 0.0
-    running_examples = 0
-
-    total_batches = len(loader)
-    if max_batches:
-        total_batches = min(total_batches, max_batches)
-    t_start = time.time()
-
-    for batch_idx, (x_batch, y_batch) in enumerate(loader, start=1):
-        if max_batches and batch_idx > max_batches:
-            break
-
-        x_batch = x_batch.to(device)  # [B, 80]
-        y_batch = y_batch.to(device)  # [B]
-
-        optimizer.zero_grad()
-        logits = model(x_batch)       # [B, VOCAB_SIZE]
-        loss = criterion(logits, y_batch)
-        loss.backward()
-        optimizer.step()
-
-        # Media ponderada por el tamaño real del batch (el último puede ser menor)
-        batch_size = x_batch.size(0)
-        running_loss += loss.item() * batch_size
-        running_examples += batch_size
-
-        # Pérdida instantánea por step
-        writer.add_scalar("Loss/train_step", loss.item(), global_step)
-        global_step += 1
-
-        # Progreso intermedio: sin esto, un entrenamiento largo en CPU no
-        # imprimiría nada hasta terminar la época completa.
-        if batch_idx % 200 == 0 or batch_idx == total_batches:
-            elapsed = time.time() - t_start
-            print(
-                f"  [época {epoch}] batch {batch_idx}/{total_batches} | "
-                f"loss={loss.item():.4f} | {elapsed:.0f}s",
-                flush=True,
-            )
-
-    return running_loss / max(running_examples, 1), global_step
+def subsample_indices(n: int, size: int | None, seed: int = SEED) -> np.ndarray | None:
+    if size is None or size >= n:
+        return None
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(n, size=size, replace=False))
 
 
 @torch.no_grad()
-def evaluate(model, loader, criterion, device, max_batches: int = 0):
-    """Pérdida media de validación, ponderada por el tamaño de cada batch."""
+def predict_logits(
+    model: nn.Module,
+    x: torch.Tensor,
+    device: torch.device,
+    batch_size: int = 2048,
+    amp_enabled: bool = False,
+    amp_dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
     model.eval()
-    running_loss = 0.0
-    running_examples = 0
-
-    for batch_idx, (x_batch, y_batch) in enumerate(loader, start=1):
-        if max_batches and batch_idx > max_batches:
-            break
-
-        x_batch = x_batch.to(device)
-        y_batch = y_batch.to(device)
-        logits = model(x_batch)
-        loss = criterion(logits, y_batch)
-
-        batch_size = x_batch.size(0)
-        running_loss += loss.item() * batch_size
-        running_examples += batch_size
-
-    return running_loss / max(running_examples, 1)
+    chunks: list[torch.Tensor] = []
+    for start in range(0, len(x), batch_size):
+        xb = x[start : start + batch_size].to(device, non_blocking=(device.type == "cuda")).long()
+        with amp_context(device, enabled=amp_enabled, dtype=amp_dtype):
+            logits = model(xb, return_all_tokens=False)
+        chunks.append(logits.float().cpu())
+    return torch.cat(chunks, dim=0)
 
 
-# ---------------------------------------------------------------------------
-# Programa principal
-# ---------------------------------------------------------------------------
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    criterion: nn.Module,
+    device: torch.device,
+    *,
+    amp_enabled: bool,
+    amp_dtype: torch.dtype,
+    scaler: torch.amp.GradScaler | None,
+    grad_accum: int = 1,
+    clip_norm: float = 1.0,
+) -> dict[str, float]:
+    model.train()
+    total_loss = 0.0
+    total_tokens = 0
+    skipped = 0
+    optimizer.zero_grad(set_to_none=True)
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Entrena el ShakespeareTransformer para predecir el siguiente carácter."
-    )
-    parser.add_argument("--epochs", type=int, default=NUM_EPOCHS,
-                        help="Número de épocas (default: %(default)s)")
-    parser.add_argument("--lr", type=float, default=LEARNING_RATE,
-                        help="Learning rate de AdamW (default: %(default)s)")
-    parser.add_argument("--weight_decay", type=float, default=0.01,
-                        help="Weight decay de AdamW (default: %(default)s)")
-    parser.add_argument("--batch_size", type=int, default=BATCH_SIZE,
-                        help="Tamaño de batch (default: %(default)s)")
-    parser.add_argument("--device", type=str, default="auto",
-                        choices=["auto", "cuda", "mps", "cpu"],
-                        help="Dispositivo (default: %(default)s = cuda > mps > cpu)")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Semilla de reproducibilidad (default: %(default)s)")
-    parser.add_argument("--max_train_batches", type=int, default=0,
-                        help="Límite de batches de train por época; 0 = todos (smoke test)")
-    parser.add_argument("--max_val_batches", type=int, default=0,
-                        help="Límite de batches de validación; 0 = todos (smoke test)")
-    parser.add_argument("--num_workers", type=int, default=0,
-                        help="Workers del DataLoader (default: %(default)s)")
-    return parser.parse_args()
+    num_batches = len(loader)
+    for step_idx, (blocks,) in enumerate(loader, start=1):
+        blocks = blocks.to(device, non_blocking=(device.type == "cuda")).long()
+        xb = blocks[:, :-1]
+        yb = blocks[:, 1:]
+
+        with amp_context(device, enabled=amp_enabled, dtype=amp_dtype):
+            logits = model(xb, return_all_tokens=True)
+            raw_loss = criterion(logits.reshape(-1, logits.size(-1)), yb.reshape(-1))
+            loss = raw_loss / float(grad_accum)
+
+        if not torch.isfinite(raw_loss):
+            optimizer.zero_grad(set_to_none=True)
+            skipped += 1
+            continue
+
+        if scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        should_step = (step_idx % grad_accum == 0) or (step_idx == num_batches)
+        if should_step:
+            if scaler is not None:
+                scaler.unscale_(optimizer)
+            _, is_finite = clip_grad_norm_safe(model.parameters(), max_norm=clip_norm)
+            if not is_finite:
+                optimizer.zero_grad(set_to_none=True)
+                if scaler is not None:
+                    scaler.update()
+                skipped += 1
+                continue
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            scheduler.step()
+
+        n_tok = yb.numel()
+        total_loss += float(raw_loss.item()) * n_tok
+        total_tokens += n_tok
+
+    mean_nll = total_loss / max(total_tokens, 1)
+    return {
+        "train_nll": mean_nll,
+        "train_bpc": mean_nll / math.log(2.0),
+        "skipped_batches": float(skipped),
+    }
 
 
-def main():
-    args = parse_args()
-    set_seed(args.seed)
-    device = select_device(args.device)
+def plot_learning_curves(history: list[dict[str, Any]], run_name: str) -> None:
+    h = pd.DataFrame(history)
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    axes[0].plot(h["epoch"], h["train_bpc"], "o-", label="train BPC")
+    axes[0].plot(h["epoch"], h["val_bpc"], "s-", label="val BPC")
+    axes[0].set_title("Bits per Character (lower is better)")
+    axes[1].plot(h["epoch"], h["val_accuracy"], "s-", label="val accuracy")
+    axes[1].plot(h["epoch"], h["val_top5_accuracy"], "^-", label="val top-5")
+    axes[1].set_title("Validation Accuracy")
+    axes[2].plot(h["epoch"], h["val_f1_macro"], "s-", label="val F1-macro (tau=0)")
+    axes[2].set_title("Validation F1-macro")
+    for ax in axes:
+        ax.set_xlabel("epoch")
+        ax.grid(alpha=0.3)
+        ax.legend()
+    fig.suptitle(run_name)
+    fig.tight_layout()
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"learning_curves_{run_name}.png", dpi=110)
+    plt.close(fig)
 
-    # Carpeta de TensorBoard única por ejecución: runs/exp_YYYYmmdd_HHMMSS
-    run_dir = RUNS_DIR / datetime.now().strftime("exp_%Y%m%d_%H%M%S")
-    os.makedirs(run_dir, exist_ok=True)
-    writer = SummaryWriter(log_dir=str(run_dir))
 
-    # 1. Modelo, función de pérdida y optimizador
-    model = ShakespeareTransformer(
-        vocab_size=VOCAB_SIZE,
-        d_model=D_MODEL,
-        nhead=NHEAD,
-        num_layers=NUM_LAYERS,
-        dim_ffw=DIM_FFW,
-        dropout=DROPOUT,
-        max_seq_len=WINDOW_SIZE,
+def train_model(
+    args: argparse.Namespace,
+    vocab: dict[str, Any],
+    train_blocks: torch.Tensor,
+    val_x: torch.Tensor,
+    val_y: torch.Tensor,
+    train_class_counts: np.ndarray,
+    device: torch.device,
+    *,
+    save: bool = True,
+) -> dict[str, Any]:
+    seed_everything(args.seed, deterministic=True)
+    profile = get_hardware_profile(device, args.profile)
+    batch_size = args.batch_size or profile.batch_size
+    grad_accum = args.grad_accum or profile.grad_accum
+
+    vocab_size = int(vocab["size"])
+    model = CharTransformer(
+        vocab_size=vocab_size,
+        d_model=args.d_model,
+        n_heads=args.n_heads,
+        n_layers=args.n_layers,
+        dropout=args.dropout,
+        max_len=WINDOW_SIZE,
+        activation="gelu",
+        tie_weights=True,
     ).to(device)
 
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+    loader_gen = torch.Generator().manual_seed(args.seed)
+    loader = DataLoader(
+        TensorDataset(train_blocks),
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=False,
+        generator=loader_gen,
+        **dataloader_kwargs(device, num_workers=args.num_workers),
     )
 
-    n_params = sum(p.numel() for p in model.parameters())
-    train_loader, val_loader = make_loaders(args.batch_size, args.num_workers, args.seed)
+    steps_per_epoch = math.ceil(len(loader) / float(grad_accum))
+    total_steps = max(1, steps_per_epoch * args.epochs)
 
-    print(f"Device: {device} | Parámetros: {n_params:,} | Run: {run_dir}", flush=True)
-    print(f"Épocas: {args.epochs} | lr: {args.lr} | weight_decay: {args.weight_decay}"
-          f" | batch_size: {args.batch_size} | seed: {args.seed}", flush=True)
-    print(f"Batches/época: train={len(train_loader)} val={len(val_loader)}\n", flush=True)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=args.lr,
+        betas=(0.9, 0.95),
+        weight_decay=args.weight_decay,
+        foreach=profile.use_foreach,
+    )
+    scheduler = build_warmup_cosine_scheduler(
+        optimizer, total_steps=total_steps, warmup_ratio=args.warmup_ratio, min_lr_ratio=0.01
+    )
+    scaler = torch.amp.GradScaler("cuda") if profile.use_grad_scaler else None
+    criterion = nn.CrossEntropyLoss()
+    writer = SummaryWriter(RUNS_DIR / args.run_name) if not args.fast_verify else None
 
-    best_val_loss = float("inf")
-    global_step = 0
-    try:
-        for epoch in range(1, args.epochs + 1):
-            t0 = time.time()
+    history: list[dict[str, Any]] = []
+    best: dict[str, Any] | None = None
+    best_state: dict[str, torch.Tensor] | None = None
+    bad_epochs = 0
+    t_start = time.time()
 
-            # 2. Entrenamiento de la época
-            train_loss, global_step = train_one_epoch(
-                model, train_loader, criterion, optimizer, device, writer,
-                epoch, global_step, max_batches=args.max_train_batches,
-            )
+    print(
+        f"[{args.run_name}] params={count_parameters(model):,} | blocks={len(train_blocks):,} "
+        f"| val={len(val_x):,} | device={device} ({profile.name}) | bs={batch_size}x{grad_accum}"
+    )
 
-            # 3. Validación de la época
-            val_loss = evaluate(
-                model, val_loader, criterion, device,
-                max_batches=args.max_val_batches,
-            )
+    for epoch in range(1, args.epochs + 1):
+        t0 = time.time()
+        tr = train_one_epoch(
+            model,
+            loader,
+            optimizer,
+            scheduler,
+            criterion,
+            device,
+            amp_enabled=profile.amp_enabled,
+            amp_dtype=profile.amp_dtype,
+            scaler=scaler,
+            grad_accum=grad_accum,
+            clip_norm=args.clip_norm,
+        )
 
-            # 4. Medias por época en TensorBoard
-            writer.add_scalar("Loss/train", train_loss, epoch)
-            writer.add_scalar("Loss/val", val_loss, epoch)
-            writer.flush()
+        val_logits = predict_logits(
+            model,
+            val_x,
+            device,
+            batch_size=max(512, batch_size * 4),
+            amp_enabled=profile.amp_enabled,
+            amp_dtype=profile.amp_dtype,
+        )
+        val_m = compute_multiclass_metrics(
+            val_y.numpy(),
+            val_logits,
+            with_ranking_metrics=False,
+        )
+        lr_now = float(optimizer.param_groups[0]["lr"])
+        row = {
+            "epoch": epoch,
+            "lr": lr_now,
+            "train_nll": tr["train_nll"],
+            "train_bpc": tr["train_bpc"],
+            "val_nll": val_m["cross_entropy_nats"],
+            "val_bpc": val_m["bpc"],
+            "val_accuracy": val_m["accuracy"],
+            "val_top5_accuracy": val_m["top5_accuracy"],
+            "val_f1_macro": val_m["f1_macro"],
+            "val_ece": val_m["ece"],
+            "skipped_batches": tr["skipped_batches"],
+        }
+        history.append(row)
+        if writer is not None:
+            for k, v in row.items():
+                if k != "epoch":
+                    writer.add_scalar(k, v, epoch)
 
-            # 5. Guardado del mejor modelo según la val loss
-            improved = val_loss < best_val_loss
-            marker = ""
-            if improved:
-                best_val_loss = val_loss
-                os.makedirs(CHECKPOINTS_DIR, exist_ok=True)
-                torch.save(
-                    {
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "epoch": epoch,
-                        "val_loss": val_loss,
-                    },
-                    BEST_MODEL_PATH,
-                )
-                marker = "  <-- nuevo mejor modelo guardado"
+        improved = best is None or row["val_bpc"] < best["val_bpc"] - 1e-4
+        print(
+            f"epoch {epoch:02d}/{args.epochs} | train/val BPC {row['train_bpc']:.4f}/{row['val_bpc']:.4f} "
+            f"| val acc {row['val_accuracy']:.4f} | top5 {row['val_top5_accuracy']:.4f} "
+            f"| F1-macro {row['val_f1_macro']:.4f} | lr {lr_now:.2e} ({time.time() - t0:.1f}s)"
+            f"{' *best*' if improved else ''}"
+        )
+        if improved:
+            best = dict(row)
+            best_state = cpu_state_dict(model)
+            bad_epochs = 0
+        else:
+            bad_epochs += 1
+            if bad_epochs >= args.patience:
+                print(f"Early stopping en época {epoch} (sin mejora en {args.patience} épocas).")
+                break
 
-            elapsed = time.time() - t0
-            print(
-                f"[Época {epoch:03d}/{args.epochs}] train_loss={train_loss:.4f} "
-                f"val_loss={val_loss:.4f} | {elapsed:.0f}s{marker}",
-                flush=True,
-            )
-    finally:
+    if writer is not None:
         writer.close()
 
-    print(f"\nEntrenamiento terminado. Mejor val_loss={best_val_loss:.4f}", flush=True)
-    print(f"Mejor checkpoint: {BEST_MODEL_PATH}", flush=True)
+    if best_state is None or best is None:
+        raise RuntimeError("No se obtuvo ningún checkpoint válido durante el entrenamiento.")
+
+    model.load_state_dict(best_state)
+    best_val_logits = predict_logits(
+        model,
+        val_x,
+        device,
+        batch_size=max(512, batch_size * 4),
+        amp_enabled=profile.amp_enabled,
+        amp_dtype=profile.amp_dtype,
+    )
+    tau_opt, val_f1_adj = fit_logit_adjustment_tau(best_val_logits, val_y.numpy(), train_class_counts)
+    val_metrics_raw = compute_multiclass_metrics(
+        val_y.numpy(), best_val_logits, with_ranking_metrics=not args.fast_verify
+    )
+    val_metrics_adj = compute_multiclass_metrics(
+        val_y.numpy(),
+        apply_logit_adjustment(best_val_logits, train_class_counts, tau_opt),
+        with_ranking_metrics=False,
+    )
+
+    result = {
+        "history": history,
+        "best": best,
+        "logit_adj_tau": tau_opt,
+        "val_metrics_calibrated": val_metrics_raw,
+        "val_metrics_logit_adjusted": val_metrics_adj,
+        "train_seconds": time.time() - t_start,
+    }
+
+    if args.fast_verify:
+        print(f"VAL_BPC={best['val_bpc']:.6f}")
+        print(f"VAL_F1_MACRO_ADJ={val_f1_adj:.6f}")
+
+    if save and not args.fast_verify:
+        plot_learning_curves(history, args.run_name)
+        metadata = {
+            "model_hparams": model.hparams,
+            "train_hparams": {
+                "lr": args.lr,
+                "weight_decay": args.weight_decay,
+                "dropout": args.dropout,
+                "batch_size": batch_size,
+                "grad_accum": grad_accum,
+                "epochs": args.epochs,
+                "stride": args.stride,
+                "warmup_ratio": args.warmup_ratio,
+                "clip_norm": args.clip_norm,
+                "patience": args.patience,
+                "seed": args.seed,
+                "profile": profile.name,
+                "objective": "autoregressive_multi_token_ce_calibrated",
+            },
+            "epoch": best["epoch"],
+            "val_bpc": best["val_bpc"],
+            "logit_adj_tau": tau_opt,
+            "train_class_counts": train_class_counts.tolist(),
+            "val_metrics_calibrated": val_metrics_raw,
+            "val_metrics_logit_adjusted": val_metrics_adj,
+            "run_name": args.run_name,
+            "train_seconds": result["train_seconds"],
+            "history": history,
+        }
+        ckpt_path = CHECKPOINTS_DIR / (
+            "model_best.pt" if args.save_as_best else f"{args.run_name}.pt"
+        )
+        save_checkpoint(ckpt_path, cpu_state_dict(model), metadata=metadata)
+        print(
+            f"Checkpoint seguro guardado en {to_relative_path(ckpt_path)} "
+            f"(epoch={best['epoch']}, val_bpc={best['val_bpc']:.4f}, "
+            f"tau={tau_opt:.2f}, val_f1_adj={val_f1_adj:.4f})"
+        )
+
+    return result
+
+
+def run_search(
+    args: argparse.Namespace,
+    vocab: dict[str, Any],
+    train_blocks: torch.Tensor,
+    val_x: torch.Tensor,
+    val_y: torch.Tensor,
+    train_class_counts: np.ndarray,
+    device: torch.device,
+) -> None:
+    rows = []
+    for lr in SEARCH_LRS:
+        for reg in SEARCH_REG:
+            run_args = argparse.Namespace(**vars(args))
+            run_args.lr = lr
+            run_args.dropout = reg["dropout"]
+            run_args.weight_decay = reg["weight_decay"]
+            run_args.run_name = f"search_v2_lr{lr:g}_do{reg['dropout']:g}_wd{reg['weight_decay']:g}"
+            res = train_model(
+                run_args, vocab, train_blocks, val_x, val_y, train_class_counts, device, save=False
+            )
+            best = res["best"]
+            rows.append(
+                {
+                    "run_name": run_args.run_name,
+                    "lr": lr,
+                    "dropout": reg["dropout"],
+                    "weight_decay": reg["weight_decay"],
+                    "best_epoch": best["epoch"],
+                    "val_bpc": best["val_bpc"],
+                    "val_accuracy": best["val_accuracy"],
+                    "val_f1_macro": best["val_f1_macro"],
+                    "val_f1_macro_adj": res["val_metrics_logit_adjusted"]["f1_macro"],
+                    "logit_adj_tau": res["logit_adj_tau"],
+                    "minutes": res["train_seconds"] / 60.0,
+                }
+            )
+    table = pd.DataFrame(rows).sort_values("val_bpc", ascending=True)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    table.to_csv(REPORTS_DIR / "hparam_search.csv", index=False)
+    print(table.round(4).to_string(index=False))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Entrenamiento multi-token del Transformer W2.")
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--grad-accum", type=int, default=None)
+    parser.add_argument("--d-model", type=int, default=256)
+    parser.add_argument("--n-heads", type=int, default=4)
+    parser.add_argument("--n-layers", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=0.05)
+    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--warmup-ratio", type=float, default=0.05)
+    parser.add_argument("--clip-norm", type=float, default=1.0)
+    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--stride", type=int, default=40)
+    parser.add_argument("--max-train-blocks", type=int, default=None)
+    parser.add_argument("--max-val-samples", type=int, default=None)
+    parser.add_argument("--num-workers", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--device", default="auto", choices=DEVICE_CHOICES)
+    parser.add_argument("--profile", default="auto", choices=PROFILE_CHOICES)
+    parser.add_argument("--run-name", default="transformer_v2")
+    parser.add_argument("--save-as-best", action="store_true", default=True)
+    parser.add_argument("--search", action="store_true")
+    parser.add_argument("--fast-verify", action="store_true")
+    args = parser.parse_args()
+
+    if args.fast_verify:
+        args.max_train_blocks = args.max_train_blocks or 12_000
+        args.max_val_samples = args.max_val_samples or 50_000
+
+    seed_everything(args.seed, deterministic=True)
+    device, desc = resolve_device(args.device)
+    print(f"Device: {device} | {desc}")
+
+    vocab = read_vocab()
+    train_blocks = build_contiguous_blocks(
+        "train", vocab=vocab, block_size=WINDOW_SIZE + 1, stride=args.stride
+    )
+    if args.max_train_blocks is not None and args.max_train_blocks < len(train_blocks):
+        idx = subsample_indices(len(train_blocks), args.max_train_blocks, seed=args.seed)
+        train_blocks = train_blocks[torch.from_numpy(idx)]
+
+    val_x, val_y = load_encoded_split("val", vocab=vocab)
+    if args.max_val_samples is not None and args.max_val_samples < len(val_x):
+        v_idx = subsample_indices(len(val_x), args.max_val_samples, seed=args.seed)
+        val_x = val_x[torch.from_numpy(v_idx)]
+        val_y = val_y[torch.from_numpy(v_idx)]
+
+    _, train_y_full = load_encoded_split("train", vocab=vocab)
+    train_class_counts = torch.bincount(train_y_full.long(), minlength=int(vocab["size"])).numpy()
+
+    if args.search:
+        run_search(args, vocab, train_blocks, val_x, val_y, train_class_counts, device)
+    else:
+        train_model(args, vocab, train_blocks, val_x, val_y, train_class_counts, device, save=True)
 
 
 if __name__ == "__main__":

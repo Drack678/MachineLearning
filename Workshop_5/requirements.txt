@@ -1,0 +1,14 @@
+# Workshop 5 - GANs para generación de datos sintéticos y data augmentation
+# Versiones fijadas para reproducibilidad (instalar PyTorch ROCm primero en AMD RX 9060 XT).
+#
+# === AMD Radeon RX 9060 XT (RDNA 4 / gfx1200) ===
+#   python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "torch[device-gfx1200]"
+#   python -m pip install -r requirements.txt
+#   python -m pip install --no-deps -e ..
+
+numpy==2.5.3
+pandas==3.0.6
+pyarrow==26.0.1
+scikit-learn==1.9.1
+tensorboard==2.21.0
+matplotlib==3.11.2

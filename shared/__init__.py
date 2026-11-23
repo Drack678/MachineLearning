@@ -1,0 +1,63 @@
+"""Módulo compartido para Workshops 1-5 (configuración, dispositivos, datos, modelos y métricas)."""
+
+from shared.checkpoints import load_checkpoint, save_checkpoint
+from shared.config import (
+    CACHE_DIR,
+    REPO_ROOT,
+    SEED,
+    SPLITS_FILE,
+    UNK_INDEX,
+    UNK_TOKEN,
+    VOCAB_FILE,
+    WINDOW_SIZE,
+    WORKSHOP_DIRS,
+    to_relative_path,
+    verify_data_invariants,
+)
+from shared.device import (
+    DEVICE_CHOICES,
+    PROFILE_CHOICES,
+    HardwareProfile,
+    amp_context,
+    clip_grad_norm_safe,
+    cpu_state_dict,
+    dataloader_kwargs,
+    get_amp_config,
+    get_hardware_profile,
+    is_directml,
+    is_rocm_build,
+    resolve_device,
+    seed_everything,
+)
+from shared.models import CharTransformer, count_parameters
+
+__all__ = [
+    "CACHE_DIR",
+    "DEVICE_CHOICES",
+    "PROFILE_CHOICES",
+    "REPO_ROOT",
+    "SEED",
+    "SPLITS_FILE",
+    "UNK_INDEX",
+    "UNK_TOKEN",
+    "VOCAB_FILE",
+    "WINDOW_SIZE",
+    "WORKSHOP_DIRS",
+    "CharTransformer",
+    "HardwareProfile",
+    "amp_context",
+    "clip_grad_norm_safe",
+    "count_parameters",
+    "cpu_state_dict",
+    "dataloader_kwargs",
+    "get_amp_config",
+    "get_hardware_profile",
+    "is_directml",
+    "is_rocm_build",
+    "load_checkpoint",
+    "resolve_device",
+    "save_checkpoint",
+    "seed_everything",
+    "to_relative_path",
+    "verify_data_invariants",
+]

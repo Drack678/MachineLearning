@@ -18,11 +18,16 @@ SEED: int = 42
 def set_seeds(seed: int = SEED) -> None:
     """Seed the random number generators used in this project.
 
-    scikit-learn has no global seed, so its splitters are always created with
-    `random_state=SEED` where they are used.
+    Delega a `shared.device.seed_everything` si el paquete compartido está disponible;
+    de lo contrario siembra `random` y `numpy`.
     """
-    random.seed(seed)
-    np.random.seed(seed)
+    try:
+        from shared.device import seed_everything
+
+        seed_everything(seed, deterministic=True)
+    except ImportError:
+        random.seed(seed)
+        np.random.seed(seed)
 
 
 # --- Dataset on the Hugging Face Hub ---------------------------------------
