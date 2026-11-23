@@ -1,0 +1,93 @@
+# =============================================================================
+# Agentes de IA y configuraciones locales de herramientas
+# =============================================================================
+.agents/
+.gemini/
+.claude/
+.codex/
+.cursor/
+.windsurf/
+.antigravity/
+CLAUDE.md
+AGENTS.md
+script.sh
+
+# =============================================================================
+# Python, entornos virtuales y empaquetado
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+ENV/
+**/.venv/
+**/venv/
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ty_cache/
+.coverage
+htmlcov/
+
+# =============================================================================
+# Datos pesados, caches binarios y archivos generados (NO ignorar splits/vocab)
+# =============================================================================
+shared/.cache/
+Workshop_1/data/raw/
+Workshop_1/data/processed/
+Workshop_2/data/processed/
+Workshop_3/data/words*.txt
+Workshop_3/data/raw/
+Workshop_3/data/processed/
+Workshop_5/data/augmented/
+*.parquet
+
+# Mantener explícitamente los invariantes reproducibles de Workshop 1
+!Workshop_1/data/splits.json
+!Workshop_1/data/vocab.json
+
+# =============================================================================
+# Checkpoints pesados y logs de entrenamiento (TensorBoard / Autoresearch)
+# =============================================================================
+*.pt
+*.pth
+*.ckpt
+*.joblib
+*.safetensors
+**/checkpoints/*.pt
+**/checkpoints/*.joblib
+**/checkpoints/legacy/
+**/runs/
+events.out.tfevents.*
+autoresearch-results.tsv
+autoresearch-lessons.md
+*.db
+*.sqlite3
+
+# =============================================================================
+# Jupyter, IDEs y sistema operativo
+# =============================================================================
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# Secretos y variables de entorno
+# =============================================================================
+.env
+.env.*
+!.env.example
