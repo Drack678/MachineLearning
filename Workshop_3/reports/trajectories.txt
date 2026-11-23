@@ -1,0 +1,19 @@
+Context: ...'gh mortal. We cannot weigh our brother with ourself. Great m'
+  greedy Transformer (W2): 'aster, I will not see thee to the court of the world. I will not stay thee again. I will not stay th'
+  Double+Dueling DQN (W3): "aster, I will not be so far to-morrow. If he be so, I'll bear thee a woman's heart as thy father, I'"
+
+Context: ...' I try friends. You shall perceive how you Mistake my fortun'
+  greedy Transformer (W2): 'e and my soul To see your son and my soul to the world. I will not see you this world to see your ho'
+  Double+Dueling DQN (W3): 'e and my son As you have seen the soul of her breath. I will no more than he hath a thine own father'
+
+Context: ...'en, That scolds against the quality of flesh And not believe'
+  greedy Transformer (W2): ' the streets of the world That the seas of the streets are the streets of the world, And the sun of '
+  Double+Dueling DQN (W3): ' the sea, and make them sad. Ay, my lord. I will not be so much as I have seen them but they are bor'
+
+Context: ...'in revenge thereof, sith God is just, He be as miserably sla'
+  greedy Transformer (W2): 'in as the streets of the world, And therefore the sun is not so much as I have seen the streets of t'
+  Double+Dueling DQN (W3): "in, as I am sure I shall see thee. If thou dost not seek the world to thee too, I'll stay a way toge"
+
+Context: ...'st not read? There will little learning die, then, that day '
+  greedy Transformer (W2): 'is not so much as I have seen the streets of the world, And the sun is the strange of the world That'
+  Double+Dueling DQN (W3): "is no more than the world will be so far. I will not bear it. If he were not, I'll stay thee to thy "

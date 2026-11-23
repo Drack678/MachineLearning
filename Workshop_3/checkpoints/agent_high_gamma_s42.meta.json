@@ -1,0 +1,21 @@
+{
+  "config_name": "high_gamma",
+  "config": {
+    "lr": 0.0005,
+    "gamma": 0.98,
+    "eps_decay": 0.993,
+    "tau": 0.005
+  },
+  "seed": 42,
+  "episode": 400,
+  "q_hparams": {
+    "tabular_dim": 34,
+    "lm_hidden_dim": 256,
+    "n_actions": 5,
+    "context_proj_dim": 64,
+    "hidden_dim": 128
+  },
+  "val_return": 0.7109002663535791,
+  "val_mean_log_prob": -0.727499452837301,
+  "val_quality": -2.9265969978329256
+}
