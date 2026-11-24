@@ -8,26 +8,35 @@ import time
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import torch
-from sklearn.metrics import silhouette_score
-from torch.utils.data import DataLoader, TensorDataset
-from torch.utils.tensorboard import SummaryWriter
-
 ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from shared.checkpoints import save_checkpoint
-from shared.config import SEED, to_relative_path
-from shared.data import read_vocab
-from shared.device import (
+from Workshop_4.src.logging_utils import (  # noqa: E402
+    configure_rocm_env,
+    format_duration,
+    log,
+    silence_native_rocm_logs,
+)
+
+configure_rocm_env()
+
+import matplotlib  # noqa: E402
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import torch  # noqa: E402
+from sklearn.metrics import silhouette_score  # noqa: E402
+from torch.utils.data import DataLoader, TensorDataset  # noqa: E402
+from torch.utils.tensorboard import SummaryWriter  # noqa: E402
+
+from shared.checkpoints import save_checkpoint  # noqa: E402
+from shared.config import SEED, to_relative_path  # noqa: E402
+from shared.data import read_vocab  # noqa: E402
+from shared.device import (  # noqa: E402
     DEVICE_CHOICES,
     PROFILE_CHOICES,
     amp_context,
@@ -35,10 +44,11 @@ from shared.device import (
     cpu_state_dict,
     dataloader_kwargs,
     get_hardware_profile,
+    is_rocm_build,
     resolve_device,
     seed_everything,
 )
-from Workshop_4.src.autoencoder import (
+from Workshop_4.src.autoencoder import (  # noqa: E402
     CHECKPOINTS_DIR,
     FIGURES_DIR,
     REPORTS_DIR,
@@ -125,6 +135,9 @@ def train_run(
     vocab_size: int,
     device: torch.device,
     args: argparse.Namespace,
+    *,
+    run_idx: int = 1,
+    total_runs: int = 1,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     seed_everything(args.seed, deterministic=True)
     profile = get_hardware_profile(device, args.profile)
@@ -132,10 +145,12 @@ def train_run(
 
     x_train: torch.Tensor = data["x_train"]
     x_val: torch.Tensor = data["x_val"]
+    seq_len = int(x_train.size(1))
 
     model = SeqTextAutoencoder(
         vocab_size=vocab_size, z_dim=z_dim, variational=variational
     ).to(device)
+    n_params = sum(p.numel() for p in model.parameters())
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
@@ -155,23 +170,34 @@ def train_run(
         generator=torch.Generator().manual_seed(args.seed),
         **dataloader_kwargs(device, num_workers=args.num_workers),
     )
+    n_batches = len(loader)
+    amp_label = str(profile.amp_dtype).replace("torch.", "") if profile.amp_enabled else "fp32"
+    model_kind = f"VAE(z={z_dim}, beta={beta:g})" if variational else f"AE(z={z_dim})"
+    log(
+        f"--- [{run_idx}/{total_runs}] {name} | {model_kind} | {n_params / 1e6:.2f}M params "
+        f"| epochs={args.epochs} | batch={batch_size} ({n_batches} steps/ep) | amp={amp_label} ---"
+    )
 
     history: list[dict[str, Any]] = []
     best: dict[str, Any] | None = None
     best_state: dict[str, torch.Tensor] | None = None
+    epoch_times: list[float] = []
     t0 = time.time()
 
     for epoch in range(1, args.epochs + 1):
+        ep_t0 = time.time()
+        last_heartbeat = ep_t0
         model.train()
         beta_now = (
             cyclical_kl_beta(epoch, args.epochs, beta, n_cycles=args.kl_cycles)
             if variational
             else 0.0
         )
-        ce_sum = 0.0
+        ce_char_sum_t = torch.zeros((), device=device, dtype=torch.float32)
         n_seen = 0
+        skipped_steps = 0
 
-        for (xb,) in loader:
+        for step, (xb,) in enumerate(loader, start=1):
             xb = xb.to(device, non_blocking=(device.type == "cuda")).long()
             optimizer.zero_grad(set_to_none=True)
 
@@ -185,6 +211,7 @@ def train_run(
 
             if not torch.isfinite(loss):
                 optimizer.zero_grad(set_to_none=True)
+                skipped_steps += 1
                 continue
 
             if scaler is not None:
@@ -193,18 +220,41 @@ def train_run(
                 _, is_fin = clip_grad_norm_safe(model.parameters(), max_norm=1.0)
                 if is_fin:
                     scaler.step(optimizer)
+                else:
+                    skipped_steps += 1
                 scaler.update()
             else:
                 loss.backward()
                 _, is_fin = clip_grad_norm_safe(model.parameters(), max_norm=1.0)
                 if is_fin:
                     optimizer.step()
+                else:
+                    skipped_steps += 1
 
-            ce_sum += float(recon.sum().item())
+            ce_char_sum_t = ce_char_sum_t + (recon.detach().float().sum() / float(seq_len))
             n_seen += xb.size(0)
 
+            now = time.time()
+            if epoch == 1 and step == 1:
+                log(
+                    f"[{name}] warmup GPU listo ({format_duration(now - ep_t0)}) | "
+                    f"entrenando {n_batches} batches/ep..."
+                )
+                last_heartbeat = now
+            elif step < n_batches and (now - last_heartbeat) >= 15.0:
+                pct = 100.0 * step / max(1, n_batches)
+                cur_ce = float(ce_char_sum_t.item()) / max(1, n_seen)
+                log(
+                    f"[{name}] ep {epoch:02d}/{args.epochs:02d} | "
+                    f"batch {step}/{n_batches} ({pct:4.1f}%) | train_ce={cur_ce:.4f} | "
+                    f"elapsed={format_duration(now - ep_t0)}"
+                )
+                last_heartbeat = now
+
+        lr_now = float(optimizer.param_groups[0]["lr"])
         scheduler.step()
 
+        train_recon_ce = float(ce_char_sum_t.item()) / max(1, n_seen)
         val = evaluate_ae(
             model,
             x_val,
@@ -216,7 +266,7 @@ def train_run(
         )
         row = {
             "epoch": epoch,
-            "train_recon_ce": ce_sum / max(1, n_seen * x_train.size(1)),
+            "train_recon_ce": train_recon_ce,
             "val_recon_ce": val["recon_ce"],
             "val_recon_ce_mc": val["recon_ce_mc"],
             "val_char_acc": val["char_acc"],
@@ -236,9 +286,37 @@ def train_run(
         else:
             score = val["recon_ce"]
 
-        if best is None or score < best["select_score"]:
+        is_best = best is None or score < best["select_score"]
+        if is_best:
             best = {"select_score": score, **row}
             best_state = cpu_state_dict(model)
+
+        ep_s = time.time() - ep_t0
+        epoch_times.append(ep_s)
+        avg_ep_s = (
+            sum(epoch_times[1:]) / len(epoch_times[1:])
+            if len(epoch_times) > 1
+            else epoch_times[0]
+        )
+        eta_s = avg_ep_s * (args.epochs - epoch)
+        best_tag = " *best" if is_best else ""
+        skip_tag = f" | skipped={skipped_steps}" if skipped_steps else ""
+
+        if variational:
+            log(
+                f"[{name}] ep {epoch:02d}/{args.epochs:02d} | "
+                f"train_ce={train_recon_ce:.4f} | val_ce={val['recon_ce']:.4f} | "
+                f"val_acc={val['char_acc'] * 100:5.2f}% | "
+                f"kl={val['kl']:6.2f} (b={beta_now:.2f}) | elbo={val['elbo_mc']:.2f} | "
+                f"{format_duration(ep_s)} | ETA {format_duration(eta_s)}{skip_tag}{best_tag}"
+            )
+        else:
+            log(
+                f"[{name}] ep {epoch:02d}/{args.epochs:02d} | "
+                f"train_ce={train_recon_ce:.4f} | val_ce={val['recon_ce']:.4f} | "
+                f"val_acc={val['char_acc'] * 100:5.2f}% | lr={lr_now:.2e} | "
+                f"{format_duration(ep_s)} | ETA {format_duration(eta_s)}{skip_tag}{best_tag}"
+            )
 
     if writer is not None:
         writer.close()
@@ -251,11 +329,11 @@ def train_run(
     latent = batched(lambda xb: model.encode(xb)[0], data["x_sil"], device).numpy()
     sil_cos = float(silhouette_score(latent, data["y_sil"].numpy(), metric="cosine"))
 
-    print(
-        f"[{name}] best ep {best['epoch']:02d} | val CE {best['val_recon_ce']:.4f} "
-        f"| acc {best['val_char_acc']:.4f} | KL {best['val_kl']:.2f} "
-        f"| sil(cos) {sil_cos:.4f} ({(time.time() - t0) / 60:.1f} min)",
-        flush=True,
+    elapsed_total = time.time() - t0
+    log(
+        f"[{name}] FIN | best ep {best['epoch']:02d} | val_ce={best['val_recon_ce']:.4f} "
+        f"| val_acc={best['val_char_acc'] * 100:.2f}% | kl={best['val_kl']:.2f} "
+        f"| sil(cos)={sil_cos:.4f} | total={format_duration(elapsed_total)}"
     )
 
     summary = {
@@ -323,92 +401,150 @@ def main() -> None:
     parser.add_argument("--device", default="auto", choices=DEVICE_CHOICES)
     parser.add_argument("--profile", default="auto", choices=PROFILE_CHOICES)
     parser.add_argument("--fast-verify", action="store_true")
+    parser.add_argument(
+        "--verbose-rocm",
+        action="store_true",
+        help="Muestra los logs nativos de C++/MIOpen/Composable Kernel en ROCm.",
+    )
     args = parser.parse_args()
 
     if args.fast_verify:
         args.max_train = min(args.max_train, 60_000)
         args.max_val = min(args.max_val, 10_000)
 
-    seed_everything(args.seed, deterministic=True)
-    device, desc = resolve_device(args.device)
-    print(f"Device: {device} | {desc}")
-
-    CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    vocab = read_vocab()
-    x_train, _ = load_split("train", vocab=vocab, max_samples=args.max_train)
-    x_val, y_val = load_split("val", vocab=vocab, max_samples=args.max_val)
-    sil = top5_sample(y_val)
-    all_data = {
-        "x_train": x_train,
-        "x_val": x_val,
-        "label": "all_clean",
-        "x_sil": x_val[sil],
-        "y_sil": y_val[sil],
-    }
-
-    if args.fast_verify:
-        summary, _, _ = train_run(
-            f"vae_fast_b{args.beta:g}", 128, True, args.beta, all_data, int(vocab["size"]), device, args
+    silence_rocm = is_rocm_build() and not args.verbose_rocm
+    with silence_native_rocm_logs(enabled=silence_rocm):
+        t_all = time.time()
+        seed_everything(args.seed, deterministic=True)
+        device, desc = resolve_device(args.device)
+        profile = get_hardware_profile(device, args.profile)
+        eff_bs = args.batch_size or profile.batch_size
+        log(f"Device: {device} | {desc}")
+        log(
+            f"Config: profile={profile.name} | batch_size={eff_bs} | epochs={args.epochs} "
+            f"| lr={args.lr:g} | max_train={args.max_train:,} | max_val={args.max_val:,} "
+            f"| mode={'fast-verify' if args.fast_verify else 'full (6 modelos)'}"
         )
-        penalty = 0.0 if summary["val_kl"] >= 15.0 else 0.5
-        score = summary["val_char_acc"] - penalty
-        print(f"VAL_VAE_SCORE={score:.6f}")
-        print(f"VAL_KL={summary['val_kl']:.6f}")
-        return
+        if silence_rocm:
+            log("Logs nativos ROCm/MIOpen silenciados (usa --verbose-rocm para verlos).")
 
-    summaries: list[dict[str, Any]] = []
-    histories: dict[str, list[dict[str, Any]]] = {}
-    payloads: dict[str, dict[str, Any]] = {}
+        CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+        FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    def run(name: str, z: int, variational: bool, beta: float) -> None:
-        s, h, p = train_run(name, z, variational, beta, all_data, int(vocab["size"]), device, args)
-        summaries.append(s)
-        histories[name] = h
-        payloads[name] = p
+        t_data = time.time()
+        log("Cargando vocabulario y splits codificados...")
+        vocab = read_vocab()
+        x_train, _ = load_split("train", vocab=vocab, max_samples=args.max_train)
+        x_val, y_val = load_split("val", vocab=vocab, max_samples=args.max_val)
+        sil = top5_sample(y_val)
+        all_data = {
+            "x_train": x_train,
+            "x_val": x_val,
+            "label": "all_clean",
+            "x_sil": x_val[sil],
+            "y_sil": y_val[sil],
+        }
+        log(
+            f"Datos listos en {format_duration(time.time() - t_data)} | "
+            f"train={len(x_train):,} | val={len(x_val):,} | vocab={int(vocab['size'])}"
+        )
 
-    for z in (32, 64, 128):
-        run(f"ae_z{z}", z, False, 0.0)
-    best_ae = max((s for s in summaries if s["model"] == "AE"), key=lambda s: s["val_char_acc"])
-    z_best = int(best_ae["z_dim"])
+        if args.fast_verify:
+            summary, _, _ = train_run(
+                f"vae_fast_b{args.beta:g}",
+                128,
+                True,
+                args.beta,
+                all_data,
+                int(vocab["size"]),
+                device,
+                args,
+                run_idx=1,
+                total_runs=1,
+            )
+            penalty = 0.0 if summary["val_kl"] >= 15.0 else 0.5
+            score = summary["val_char_acc"] - penalty
+            print(f"VAL_VAE_SCORE={score:.6f}", flush=True)
+            print(f"VAL_KL={summary['val_kl']:.6f}", flush=True)
+            return
 
-    for beta in (0.5, 1.0, 4.0):
-        run(f"vae_b{beta:g}", z_best, True, beta)
+        summaries: list[dict[str, Any]] = []
+        histories: dict[str, list[dict[str, Any]]] = {}
+        payloads: dict[str, dict[str, Any]] = {}
+        total_runs = 6
+        run_counter = 0
 
-    healthy_vaes = [s for s in summaries if s["model"] == "VAE" and s["val_kl"] >= MIN_KL_HEALTHY]
-    vae_pool = healthy_vaes if healthy_vaes else [s for s in summaries if s["model"] == "VAE"]
-    best_vae = min(vae_pool, key=lambda s: s["val_elbo_mc"])
+        def run(name: str, z: int, variational: bool, beta: float) -> None:
+            nonlocal run_counter
+            run_counter += 1
+            s, h, p = train_run(
+                name,
+                z,
+                variational,
+                beta,
+                all_data,
+                int(vocab["size"]),
+                device,
+                args,
+                run_idx=run_counter,
+                total_runs=total_runs,
+            )
+            summaries.append(s)
+            histories[name] = h
+            payloads[name] = p
 
-    save_checkpoint(
-        CHECKPOINTS_DIR / "ae_best.pt",
-        payloads[best_ae["run"]]["state_dict"],
-        metadata=payloads[best_ae["run"]]["metadata"],
-    )
-    save_checkpoint(
-        CHECKPOINTS_DIR / "vae_best.pt",
-        payloads[best_vae["run"]]["state_dict"],
-        metadata=payloads[best_vae["run"]]["metadata"],
-    )
-    save_checkpoint(
-        CHECKPOINTS_DIR / "ae_normal.pt",
-        payloads[best_ae["run"]]["state_dict"],
-        metadata=payloads[best_ae["run"]]["metadata"],
-    )
-    save_checkpoint(
-        CHECKPOINTS_DIR / "vae_normal.pt",
-        payloads[best_vae["run"]]["state_dict"],
-        metadata=payloads[best_vae["run"]]["metadata"],
-    )
-    print(
-        f"Guardados checkpoints seguros -> ae_best={to_relative_path(CHECKPOINTS_DIR / 'ae_best.pt')} "
-        f"({best_ae['run']}), vae_best={to_relative_path(CHECKPOINTS_DIR / 'vae_best.pt')} ({best_vae['run']})"
-    )
+        for z in (32, 64, 128):
+            run(f"ae_z{z}", z, False, 0.0)
+        best_ae = max((s for s in summaries if s["model"] == "AE"), key=lambda s: s["val_char_acc"])
+        z_best = int(best_ae["z_dim"])
+        log(
+            f"Mejor AE seleccionado: {best_ae['run']} (z_dim={z_best}, "
+            f"val_acc={best_ae['val_char_acc'] * 100:.2f}%) -> iniciando VAEs..."
+        )
 
-    table = pd.DataFrame(summaries)
-    table.to_csv(REPORTS_DIR / "training_summary.csv", index=False)
-    plot_curves(histories)
+        for beta in (0.5, 1.0, 4.0):
+            run(f"vae_b{beta:g}", z_best, True, beta)
+
+        healthy_vaes = [s for s in summaries if s["model"] == "VAE" and s["val_kl"] >= MIN_KL_HEALTHY]
+        vae_pool = healthy_vaes if healthy_vaes else [s for s in summaries if s["model"] == "VAE"]
+        best_vae = min(vae_pool, key=lambda s: s["val_elbo_mc"])
+
+        save_checkpoint(
+            CHECKPOINTS_DIR / "ae_best.pt",
+            payloads[best_ae["run"]]["state_dict"],
+            metadata=payloads[best_ae["run"]]["metadata"],
+        )
+        save_checkpoint(
+            CHECKPOINTS_DIR / "vae_best.pt",
+            payloads[best_vae["run"]]["state_dict"],
+            metadata=payloads[best_vae["run"]]["metadata"],
+        )
+        save_checkpoint(
+            CHECKPOINTS_DIR / "ae_normal.pt",
+            payloads[best_ae["run"]]["state_dict"],
+            metadata=payloads[best_ae["run"]]["metadata"],
+        )
+        save_checkpoint(
+            CHECKPOINTS_DIR / "vae_normal.pt",
+            payloads[best_vae["run"]]["state_dict"],
+            metadata=payloads[best_vae["run"]]["metadata"],
+        )
+
+        table = pd.DataFrame(summaries)
+        table.to_csv(REPORTS_DIR / "training_summary.csv", index=False)
+        plot_curves(histories)
+
+        log(
+            f"Checkpoints guardados -> ae_best={to_relative_path(CHECKPOINTS_DIR / 'ae_best.pt')} "
+            f"({best_ae['run']}), vae_best={to_relative_path(CHECKPOINTS_DIR / 'vae_best.pt')} "
+            f"({best_vae['run']})"
+        )
+        log(f"Resumen guardado en {to_relative_path(REPORTS_DIR / 'training_summary.csv')}")
+        log(f"Entrenamiento completo finalizado en {format_duration(time.time() - t_all)}")
+        print("\nResumen final de runs:", flush=True)
+        cols = ["run", "best_epoch", "val_recon_ce", "val_char_acc", "val_kl", "val_silhouette_cosine"]
+        print(table[cols].round(4).to_string(index=False), flush=True)
 
 
 if __name__ == "__main__":
