@@ -1,0 +1,3 @@
+model,split,epoch,unique_sequence_ratio,mean_unique_characters,character_distribution_tv,bigram_distribution_tv,trigram_distribution_tv,unknown_character_ratio,memorization_20char_rate,lm_perplexity
+vanilla,test,14,0.9975,19.476,0.24504938271604937,0.592775,0.8426455696202532,0.0,0.0,83.42477374024108
+wgan_gp,test,2,1.0,39.456,0.25640123456790126,0.63051875,0.8597911392405063,0.004641975308641975,0.0,20259.04502328796

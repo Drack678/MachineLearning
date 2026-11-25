@@ -1,0 +1,20 @@
+{
+  "model_hparams": {
+    "vocab_size": 76,
+    "d_model": 256,
+    "n_heads": 4,
+    "n_layers": 4,
+    "dropout": 0.1,
+    "max_len": 80,
+    "activation": "gelu",
+    "tie_weights": true
+  },
+  "run_name": "workshop5_char_noise_aug",
+  "augmentation": "char_noise_aug",
+  "epoch": 20,
+  "logit_adj_tau": 0.0,
+  "val_bpc": 1.8356021335012136,
+  "test_accuracy": 0.6107933295882358,
+  "test_f1_macro_cal": 0.34124346336683775,
+  "test_f1_macro_adj": 0.34124346336683775
+}

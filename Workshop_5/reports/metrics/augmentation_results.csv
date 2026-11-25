@@ -1,0 +1,4 @@
+condition,train_blocks,best_epoch,val_bpc,val_accuracy,test_bpc,test_accuracy,test_f1_macro_cal,test_f1_macro_adj,logit_adj_tau,checkpoint
+real_only,76092,20,1.8388176931243956,0.60816,1.8233232601602125,0.609807913742749,0.3184696939860568,0.3209666962640543,0.2,Workshop_5/checkpoints/transformer_real_only.pt
+wgan_gp_filtered,83701,20,1.8340236767315947,0.61036,1.8179364195698877,0.6105357248160298,0.31924418457042325,0.32033106109897935,0.1,Workshop_5/checkpoints/transformer_wgan_gp_filtered.pt
+char_noise_aug,83701,20,1.8356021335012136,0.6098,1.8204272443023337,0.6107933295882358,0.34124346336683775,0.34124346336683775,0.0,Workshop_5/checkpoints/transformer_char_noise_aug.pt

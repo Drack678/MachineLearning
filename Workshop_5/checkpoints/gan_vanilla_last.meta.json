@@ -1,0 +1,14 @@
+{
+  "epoch": 25,
+  "tau": 0.5,
+  "generator_hparams": {
+    "vocab_size": 76,
+    "noise_dim": 128,
+    "hidden_dim": 256,
+    "seq_len": 81
+  },
+  "val_unique_sequence_ratio": 0.82,
+  "val_bigram_tv": 0.62575,
+  "vocab_size": 76,
+  "noise_dim": 128
+}
