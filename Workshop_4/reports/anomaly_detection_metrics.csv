@@ -1,0 +1,5 @@
+method,pr_auc,roc_auc,f1,precision,recall,val_threshold
+AE sequential (recon error),1.0,1.0,1.0,1.0,1.0,507.2270812988281
+VAE sequential (recon error),1.0,1.0,0.9995002498750625,0.999000999000999,1.0,266.2235107421875
+VAE sequential (recon + KL),1.0,1.0,0.9995002498750625,0.999000999000999,1.0,376.1614074707031
+Transformer W2 (window NLL),1.0,1.0,1.0,1.0,1.0,4.965905666351318
