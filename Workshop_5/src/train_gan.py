@@ -4,32 +4,43 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from collections import Counter
 from pathlib import Path
-
-import torch
-import torch.nn.functional as F
-from torch import nn
-from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from shared.checkpoints import save_checkpoint
-from shared.config import SEED
-from shared.data import build_contiguous_blocks
-from shared.device import (
+from Workshop_5.src.logging_utils import (  # noqa: E402
+    configure_rocm_env,
+    format_duration,
+    log,
+    silence_native_rocm_logs,
+)
+
+configure_rocm_env()
+
+import torch  # noqa: E402
+import torch.nn.functional as F  # noqa: E402
+from torch import nn  # noqa: E402
+from torch.utils.data import DataLoader  # noqa: E402
+from torch.utils.tensorboard import SummaryWriter  # noqa: E402
+
+from shared.checkpoints import save_checkpoint  # noqa: E402
+from shared.config import SEED, to_relative_path  # noqa: E402
+from shared.data import build_contiguous_blocks  # noqa: E402
+from shared.device import (  # noqa: E402
     DEVICE_CHOICES,
     clip_grad_norm_safe,
     cpu_state_dict,
     dataloader_kwargs,
+    is_rocm_build,
     resolve_device,
     seed_everything,
 )
-from Workshop_5.src.gan import (
+from Workshop_5.src.gan import (  # noqa: E402
     SEQUENCE_LENGTH,
     Discriminator,
     Generator,
@@ -74,8 +85,9 @@ def quick_val_metrics(
 def train(args: argparse.Namespace) -> None:
     seed_everything(args.seed, deterministic=True)
     device, desc = resolve_device(args.device)
-    print(f"Device: {device} | {desc}")
+    log(f"Device: {device} | {desc}")
 
+    t_data = time.time()
     dataset, vocab = load_training_data(stride=args.stride)
     val_blocks = build_contiguous_blocks("val", vocab=vocab, block_size=SEQUENCE_LENGTH, stride=80)
     loader = DataLoader(
@@ -86,20 +98,43 @@ def train(args: argparse.Namespace) -> None:
         generator=torch.Generator().manual_seed(args.seed),
         **dataloader_kwargs(device, num_workers=args.num_workers),
     )
+    n_batches = min(len(loader), args.max_batches) if args.max_batches else len(loader)
+    log(
+        f"Datos listos en {format_duration(time.time() - t_data)} | "
+        f"train={len(dataset):,} bloques | val={len(val_blocks):,} bloques"
+    )
 
     vocab_size = int(vocab["size"])
     generator = Generator(
         vocab_size=vocab_size, noise_dim=args.noise_dim, hidden_dim=args.hidden_dim
     ).to(device)
     discriminator = Discriminator(vocab_size=vocab_size, hidden_dim=args.disc_hidden_dim).to(device)
+    g_params = sum(p.numel() for p in generator.parameters())
+    d_params = sum(p.numel() for p in discriminator.parameters())
 
-    opt_g = torch.optim.Adam(generator.parameters(), lr=args.learning_rate, betas=(0.5, 0.999))
-    opt_d = torch.optim.Adam(discriminator.parameters(), lr=args.learning_rate, betas=(0.5, 0.999))
+    use_foreach = False if is_rocm_build() else None
+    opt_g = torch.optim.Adam(
+        generator.parameters(), lr=args.learning_rate, betas=(0.5, 0.999), foreach=use_foreach
+    )
+    opt_d = torch.optim.Adam(
+        discriminator.parameters(), lr=args.learning_rate, betas=(0.5, 0.999), foreach=use_foreach
+    )
     criterion = nn.BCEWithLogitsLoss()
     writer = SummaryWriter(RUNS_DIR)
 
+    log(
+        f"--- Vanilla GAN | G={g_params / 1e6:.2f}M D={d_params / 1e6:.2f}M params | "
+        f"epochs={args.epochs} | batch={args.batch_size} ({n_batches} steps/ep) | "
+        f"foreach={use_foreach} ---"
+    )
+
     best_bigram_tv = float("inf")
+    epoch_times: list[float] = []
+    t_all = time.time()
+
     for epoch in range(1, args.epochs + 1):
+        ep_t0 = time.time()
+        last_heartbeat = ep_t0
         tau = gumbel_temperature(epoch, args.epochs, args.tau_start, args.tau_end)
         generator.train()
         discriminator.train()
@@ -141,6 +176,23 @@ def train(args: argparse.Namespace) -> None:
             total_d += float(d_loss.item())
             batches_seen += 1
 
+            now = time.time()
+            if epoch == 1 and batch_idx == 1:
+                log(
+                    f"[vanilla] warmup GPU listo ({format_duration(now - ep_t0)}) | "
+                    f"entrenando {n_batches} batches/ep..."
+                )
+                last_heartbeat = now
+            elif batch_idx < n_batches and (now - last_heartbeat) >= 15.0:
+                pct = 100.0 * batch_idx / max(1, n_batches)
+                log(
+                    f"[vanilla] ep {epoch:02d}/{args.epochs:02d} | "
+                    f"batch {batch_idx}/{n_batches} ({pct:4.1f}%) | "
+                    f"G={total_g / batches_seen:.4f} | D={total_d / batches_seen:.4f} | "
+                    f"elapsed={format_duration(now - ep_t0)}"
+                )
+                last_heartbeat = now
+
         mean_g = total_g / max(1, batches_seen)
         mean_d = total_d / max(1, batches_seen)
         uniq_ratio, bigram_tv = quick_val_metrics(generator, val_blocks, device, tau=tau)
@@ -150,11 +202,6 @@ def train(args: argparse.Namespace) -> None:
         writer.add_scalar("val/unique_sequence_ratio", uniq_ratio, epoch)
         writer.add_scalar("val/bigram_tv", bigram_tv, epoch)
         writer.add_scalar("hparams/tau", tau, epoch)
-
-        print(
-            f"Epoch {epoch:03d}/{args.epochs} | tau {tau:.2f} | G {mean_g:.4f} | D {mean_d:.4f} "
-            f"| val_uniq {uniq_ratio:.3f} | val_bigram_tv {bigram_tv:.4f}"
-        )
 
         meta = {
             "epoch": epoch,
@@ -166,11 +213,31 @@ def train(args: argparse.Namespace) -> None:
             "noise_dim": args.noise_dim,
         }
         save_checkpoint(CHECKPOINT_DIR / "gan_vanilla_last.pt", cpu_state_dict(generator), metadata=meta)
-        if uniq_ratio >= 0.80 and bigram_tv < best_bigram_tv:
+        is_best = uniq_ratio >= 0.80 and bigram_tv < best_bigram_tv
+        if is_best:
             best_bigram_tv = bigram_tv
             save_checkpoint(CHECKPOINT_DIR / "gan_vanilla_best.pt", cpu_state_dict(generator), metadata=meta)
 
+        ep_s = time.time() - ep_t0
+        epoch_times.append(ep_s)
+        avg_ep_s = (
+            sum(epoch_times[1:]) / len(epoch_times[1:]) if len(epoch_times) > 1 else epoch_times[0]
+        )
+        eta_s = avg_ep_s * (args.epochs - epoch)
+        best_tag = " *best" if is_best else ""
+        log(
+            f"[vanilla] ep {epoch:02d}/{args.epochs:02d} | tau={tau:.2f} | "
+            f"G={mean_g:.4f} | D={mean_d:.4f} | "
+            f"val_uniq={uniq_ratio:.3f} | val_bigram_tv={bigram_tv:.4f} | "
+            f"{format_duration(ep_s)} | ETA {format_duration(eta_s)}{best_tag}"
+        )
+
     writer.close()
+    log(
+        f"Vanilla GAN finalizado en {format_duration(time.time() - t_all)} | "
+        f"best_bigram_tv={best_bigram_tv:.4f} | "
+        f"ckpt={to_relative_path(CHECKPOINT_DIR / 'gan_vanilla_best.pt')}"
+    )
 
 
 def main() -> None:
@@ -188,8 +255,14 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--max-batches", type=int, default=0)
     parser.add_argument("--device", default="auto", choices=DEVICE_CHOICES)
+    parser.add_argument(
+        "--verbose-rocm",
+        action="store_true",
+        help="Muestra logs nativos de ROCm/MIOpen sin filtrar.",
+    )
     args = parser.parse_args()
-    train(args)
+    with silence_native_rocm_logs(enabled=not args.verbose_rocm):
+        train(args)
 
 
 if __name__ == "__main__":

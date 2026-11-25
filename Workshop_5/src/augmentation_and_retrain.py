@@ -5,25 +5,35 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import time
 from pathlib import Path
 from typing import Any
-
-import numpy as np
-import pandas as pd
-import torch
-from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
-from torch.utils.tensorboard import SummaryWriter
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from shared.checkpoints import load_checkpoint, save_checkpoint
-from shared.config import SEED, W2_BEST_CHECKPOINT, WINDOW_SIZE, to_relative_path
-from shared.data import build_contiguous_blocks, load_encoded_split, read_vocab
-from shared.device import (
+from Workshop_5.src.logging_utils import (  # noqa: E402
+    configure_rocm_env,
+    format_duration,
+    log,
+    silence_native_rocm_logs,
+)
+
+configure_rocm_env()
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import torch  # noqa: E402
+from torch import nn  # noqa: E402
+from torch.utils.data import DataLoader, TensorDataset  # noqa: E402
+from torch.utils.tensorboard import SummaryWriter  # noqa: E402
+
+from shared.checkpoints import load_checkpoint, save_checkpoint  # noqa: E402
+from shared.config import SEED, W2_BEST_CHECKPOINT, WINDOW_SIZE, to_relative_path  # noqa: E402
+from shared.data import build_contiguous_blocks, load_encoded_split, read_vocab  # noqa: E402
+from shared.device import (  # noqa: E402
     DEVICE_CHOICES,
     PROFILE_CHOICES,
     amp_context,
@@ -34,15 +44,15 @@ from shared.device import (
     resolve_device,
     seed_everything,
 )
-from shared.metrics import (
+from shared.metrics import (  # noqa: E402
     apply_logit_adjustment,
     compute_multiclass_metrics,
     fit_logit_adjustment_tau,
 )
-from shared.models import CharTransformer, build_warmup_cosine_scheduler
-from Workshop_2.src.train import predict_logits
-from Workshop_5.src.evaluate_gan import load_generator_safe, sample_sequences
-from Workshop_5.src.gan import SEQUENCE_LENGTH
+from shared.models import CharTransformer, build_warmup_cosine_scheduler  # noqa: E402
+from Workshop_2.src.train import predict_logits  # noqa: E402
+from Workshop_5.src.evaluate_gan import load_generator_safe, sample_sequences  # noqa: E402
+from Workshop_5.src.gan import SEQUENCE_LENGTH  # noqa: E402
 
 OUTPUT_CHECKPOINT_DIR = ROOT / "checkpoints"
 REPORT_DIR = ROOT / "reports" / "metrics"
@@ -144,19 +154,32 @@ def train_condition(
     scaler = torch.amp.GradScaler("cuda") if profile.use_grad_scaler else None
     writer = SummaryWriter(RUNS_DIR / condition)
 
+    n_batches = len(loader)
+    n_params = sum(p.numel() for p in model.parameters())
+    amp_label = str(profile.amp_dtype).replace("torch.", "") if profile.amp_enabled else "fp32"
+    log(
+        f"--- [{condition}] CharTransformer ({n_params / 1e6:.2f}M params) | "
+        f"train={len(x_blocks):,} bloques | epochs={args.epochs} | "
+        f"batch={batch_size} ({n_batches} steps/ep) | amp={amp_label} ---"
+    )
+
     best_val_bpc = float("inf")
     best_state: dict[str, torch.Tensor] | None = None
     best_epoch = 0
     bad_epochs = 0
     history: list[dict[str, Any]] = []
+    epoch_times: list[float] = []
+    t_cond = time.time()
 
     for epoch in range(1, args.epochs + 1):
+        ep_t0 = time.time()
+        last_heartbeat = ep_t0
         model.train()
         total_loss = 0.0
         batches_ok = 0
         skipped = 0
 
-        for xb, yb in loader:
+        for step, (xb, yb) in enumerate(loader, start=1):
             optimizer.zero_grad(set_to_none=True)
             xb = xb.to(device, non_blocking=(device.type == "cuda")).long()
             yb = yb.to(device, non_blocking=(device.type == "cuda")).long()
@@ -193,6 +216,23 @@ def train_condition(
             total_loss += float(loss.item())
             batches_ok += 1
 
+            now = time.time()
+            if epoch == 1 and step == 1:
+                log(
+                    f"[{condition}] warmup GPU listo ({format_duration(now - ep_t0)}) | "
+                    f"entrenando {n_batches} batches/ep..."
+                )
+                last_heartbeat = now
+            elif step < n_batches and (now - last_heartbeat) >= 15.0:
+                pct = 100.0 * step / max(1, n_batches)
+                cur_bpc = (total_loss / max(1, batches_ok)) / math.log(2.0)
+                log(
+                    f"[{condition}] ep {epoch:02d}/{args.epochs:02d} | "
+                    f"batch {step}/{n_batches} ({pct:4.1f}%) | train_bpc={cur_bpc:.4f} | "
+                    f"elapsed={format_duration(now - ep_t0)}"
+                )
+                last_heartbeat = now
+
         if batches_ok == 0:
             raise RuntimeError(f"[{condition}] Todos los batches fueron no finitos en época {epoch}.")
 
@@ -217,24 +257,39 @@ def train_condition(
         writer.add_scalar("val/accuracy", row["val_accuracy"], epoch)
         writer.add_scalar("val/f1_macro", row["val_f1_macro"], epoch)
 
-        print(
-            f"[{condition}] ep {epoch:02d}/{args.epochs} | train/val BPC "
-            f"{row['train_bpc']:.4f}/{row['val_bpc']:.4f} | val acc {row['val_accuracy']:.4f} "
-            f"| val F1 {row['val_f1_macro']:.4f} (skipped={skipped})"
-        )
-
-        if val_m["bpc"] < best_val_bpc - 1e-4:
+        is_best = val_m["bpc"] < best_val_bpc - 1e-4
+        if is_best:
             best_val_bpc = val_m["bpc"]
             best_epoch = epoch
             best_state = cpu_state_dict(model)
             bad_epochs = 0
         else:
             bad_epochs += 1
-            if bad_epochs >= args.patience:
-                print(f"[{condition}] early stop en época {epoch}")
-                break
+
+        ep_s = time.time() - ep_t0
+        epoch_times.append(ep_s)
+        avg_ep_s = (
+            sum(epoch_times[1:]) / len(epoch_times[1:]) if len(epoch_times) > 1 else epoch_times[0]
+        )
+        eta_s = avg_ep_s * (args.epochs - epoch)
+        best_tag = " *best" if is_best else ""
+        skip_tag = f" | skipped={skipped}" if skipped else ""
+        log(
+            f"[{condition}] ep {epoch:02d}/{args.epochs:02d} | "
+            f"train/val BPC {row['train_bpc']:.4f}/{row['val_bpc']:.4f} | "
+            f"val_acc={row['val_accuracy'] * 100:5.2f}% | val_F1={row['val_f1_macro']:.4f} | "
+            f"{format_duration(ep_s)} | ETA {format_duration(eta_s)}{skip_tag}{best_tag}"
+        )
+
+        if not is_best and bad_epochs >= args.patience:
+            log(f"[{condition}] early stop en época {epoch} (best_ep={best_epoch})")
+            break
 
     writer.close()
+    log(
+        f"[{condition}] entrenamiento listo en {format_duration(time.time() - t_cond)} | "
+        f"evaluando en val/test..."
+    )
     if best_state is None:
         raise RuntimeError(f"[{condition}] No se generó ningún checkpoint válido (best_state=None).")
 
@@ -300,86 +355,95 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--device", default="auto", choices=DEVICE_CHOICES)
     parser.add_argument("--profile", default="auto", choices=PROFILE_CHOICES)
+    parser.add_argument(
+        "--verbose-rocm",
+        action="store_true",
+        help="Muestra logs nativos de ROCm/MIOpen sin filtrar.",
+    )
     args = parser.parse_args()
 
-    seed_everything(args.seed, deterministic=True)
-    device, desc = resolve_device(args.device)
-    print(f"Device: {device} | {desc}")
+    with silence_native_rocm_logs(enabled=not args.verbose_rocm):
+        t_all = time.time()
+        seed_everything(args.seed, deterministic=True)
+        device, desc = resolve_device(args.device)
+        log(f"Device: {device} | {desc}")
 
-    vocab = read_vocab()
-    vocab_size = int(vocab["size"])
-    if W2_BEST_CHECKPOINT.exists():
-        _, w2_meta = load_checkpoint(W2_BEST_CHECKPOINT, device="cpu")
-        model_hparams = w2_meta["model_hparams"]
-    else:
-        model_hparams = {
-            "vocab_size": vocab_size, "d_model": 256, "n_heads": 4,
-            "n_layers": 4, "dropout": 0.1, "max_len": WINDOW_SIZE,
-            "activation": "gelu", "tie_weights": True,
-        }
+        vocab = read_vocab()
+        vocab_size = int(vocab["size"])
+        if W2_BEST_CHECKPOINT.exists():
+            _, w2_meta = load_checkpoint(W2_BEST_CHECKPOINT, device="cpu")
+            model_hparams = w2_meta["model_hparams"]
+        else:
+            model_hparams = {
+                "vocab_size": vocab_size, "d_model": 256, "n_heads": 4,
+                "n_layers": 4, "dropout": 0.1, "max_len": WINDOW_SIZE,
+                "activation": "gelu", "tie_weights": True,
+            }
 
-    real_blocks = build_contiguous_blocks("train", vocab=vocab, block_size=SEQUENCE_LENGTH, stride=args.stride)
-    x_real_b, y_real_b = real_blocks[:, :-1], real_blocks[:, 1:]
+        real_blocks = build_contiguous_blocks("train", vocab=vocab, block_size=SEQUENCE_LENGTH, stride=args.stride)
+        x_real_b, y_real_b = real_blocks[:, :-1], real_blocks[:, 1:]
 
-    x_val, y_val = load_encoded_split("val", vocab=vocab)
-    if args.max_val_samples and args.max_val_samples < len(x_val):
-        idx = np.sort(np.random.default_rng(args.seed).choice(len(x_val), args.max_val_samples, replace=False))
-        x_val, y_val = x_val[torch.from_numpy(idx)], y_val[torch.from_numpy(idx)]
+        x_val, y_val = load_encoded_split("val", vocab=vocab)
+        if args.max_val_samples and args.max_val_samples < len(x_val):
+            idx = np.sort(np.random.default_rng(args.seed).choice(len(x_val), args.max_val_samples, replace=False))
+            x_val, y_val = x_val[torch.from_numpy(idx)], y_val[torch.from_numpy(idx)]
 
-    x_test, y_test = load_encoded_split("test", vocab=vocab)
-    if args.max_test_samples and args.max_test_samples < len(x_test):
-        idx = np.sort(np.random.default_rng(args.seed).choice(len(x_test), args.max_test_samples, replace=False))
-        x_test, y_test = x_test[torch.from_numpy(idx)], y_test[torch.from_numpy(idx)]
+        x_test, y_test = load_encoded_split("test", vocab=vocab)
+        if args.max_test_samples and args.max_test_samples < len(x_test):
+            idx = np.sort(np.random.default_rng(args.seed).choice(len(x_test), args.max_test_samples, replace=False))
+            x_test, y_test = x_test[torch.from_numpy(idx)], y_test[torch.from_numpy(idx)]
 
-    _, y_train_full = load_encoded_split("train", vocab=vocab)
-    train_counts = torch.bincount(y_train_full.long(), minlength=vocab_size).numpy()
-    char_probs = train_counts.astype(np.float64)
-    char_probs = char_probs / char_probs.sum()
+        _, y_train_full = load_encoded_split("train", vocab=vocab)
+        train_counts = torch.bincount(y_train_full.long(), minlength=vocab_size).numpy()
+        char_probs = train_counts.astype(np.float64)
+        char_probs = char_probs / char_probs.sum()
 
-    n_aug = max(1, int(round(len(real_blocks) * args.synthetic_ratio)))
-    conditions: list[tuple[str, torch.Tensor, torch.Tensor]] = [
-        ("real_only", x_real_b, y_real_b),
-    ]
+        n_aug = max(1, int(round(len(real_blocks) * args.synthetic_ratio)))
+        conditions: list[tuple[str, torch.Tensor, torch.Tensor]] = [
+            ("real_only", x_real_b, y_real_b),
+        ]
 
-    wgan_ckpt = OUTPUT_CHECKPOINT_DIR / "gan_wgan_best.pt"
-    if not wgan_ckpt.exists():
-        wgan_ckpt = OUTPUT_CHECKPOINT_DIR / "gan_wgan_last.pt"
-    if wgan_ckpt.exists():
-        syn_blocks = generate_filtered_gan_blocks(wgan_ckpt, n_aug, device=device)
+        wgan_ckpt = OUTPUT_CHECKPOINT_DIR / "gan_wgan_best.pt"
+        if not wgan_ckpt.exists():
+            wgan_ckpt = OUTPUT_CHECKPOINT_DIR / "gan_wgan_last.pt"
+        if wgan_ckpt.exists():
+            log(f"Generando {n_aug:,} bloques sintéticos desde {wgan_ckpt.name}...")
+            syn_blocks = generate_filtered_gan_blocks(wgan_ckpt, n_aug, device=device)
+            conditions.append(
+                (
+                    "wgan_gp_filtered",
+                    torch.cat([x_real_b, syn_blocks[:, :-1]], dim=0),
+                    torch.cat([y_real_b, syn_blocks[:, 1:]], dim=0),
+                )
+            )
+
+        x_noise, y_noise = build_char_noise_augmented_blocks(
+            real_blocks, char_probs, n_aug, noise_prob=args.noise_prob, seed=args.seed
+        )
         conditions.append(
             (
-                "wgan_gp_filtered",
-                torch.cat([x_real_b, syn_blocks[:, :-1]], dim=0),
-                torch.cat([y_real_b, syn_blocks[:, 1:]], dim=0),
+                "char_noise_aug",
+                torch.cat([x_real_b, x_noise], dim=0),
+                torch.cat([y_real_b, y_noise], dim=0),
             )
         )
 
-    x_noise, y_noise = build_char_noise_augmented_blocks(
-        real_blocks, char_probs, n_aug, noise_prob=args.noise_prob, seed=args.seed
-    )
-    conditions.append(
-        (
-            "char_noise_aug",
-            torch.cat([x_real_b, x_noise], dim=0),
-            torch.cat([y_real_b, y_noise], dim=0),
-        )
-    )
+        REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        results: list[dict[str, Any]] = []
+        histories: list[dict[str, Any]] = []
+        for cond_name, xb, yb in conditions:
+            res, hist = train_condition(
+                cond_name, xb, yb, x_val, y_val, x_test, y_test,
+                model_hparams, train_counts, args, device,
+            )
+            results.append(res)
+            histories.extend(hist)
+            pd.DataFrame(results).to_csv(REPORT_DIR / "augmentation_results.csv", index=False)
 
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    results: list[dict[str, Any]] = []
-    histories: list[dict[str, Any]] = []
-    for cond_name, xb, yb in conditions:
-        res, hist = train_condition(
-            cond_name, xb, yb, x_val, y_val, x_test, y_test,
-            model_hparams, train_counts, args, device,
-        )
-        results.append(res)
-        histories.extend(hist)
-        pd.DataFrame(results).to_csv(REPORT_DIR / "augmentation_results.csv", index=False)
-
-    pd.DataFrame(histories).to_csv(REPORT_DIR / "augmentation_history.csv", index=False)
-    print("\nResumen final de Data Augmentation (Workshop_5/reports/metrics/augmentation_results.csv):")
-    print(pd.DataFrame(results).round(4).to_string(index=False))
+        pd.DataFrame(histories).to_csv(REPORT_DIR / "augmentation_history.csv", index=False)
+        log(f"Data Augmentation completado en {format_duration(time.time() - t_all)}")
+        print("\nResumen final de Data Augmentation (Workshop_5/reports/metrics/augmentation_results.csv):", flush=True)
+        print(pd.DataFrame(results).round(4).to_string(index=False), flush=True)
 
 
 if __name__ == "__main__":
