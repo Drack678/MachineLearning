@@ -430,7 +430,13 @@ def audit_subgroup_fairness(
     probs_pos: np.ndarray,
     *,
     threshold: float,
-    subgroup_cols: tuple[str, ...] = ("age_group", "sex", "localization_group", "dx_type"),
+    subgroup_cols: tuple[str, ...] = (
+        "age_group",
+        "sex",
+        "localization_group",
+        "dx_type",
+        "dataset",
+    ),
     min_support: int = 20,
     disparity_flag_delta: float = 0.10,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, float]]]:

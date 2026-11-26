@@ -507,7 +507,7 @@ def _plot_calibration_and_dca(
 def _plot_fairness_subgroups(fairness_df: pd.DataFrame, out_path: Path) -> None:
     attrs = [
         a
-        for a in ("age_group", "sex", "localization_group", "dx_type")
+        for a in ("age_group", "sex", "localization_group", "dx_type", "dataset")
         if a in fairness_df["attribute"].unique()
     ]
     if not attrs:

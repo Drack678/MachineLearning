@@ -38,7 +38,8 @@ DATAVERSE_DATASET_URL: str = (
 DATAVERSE_FILES: dict[str, dict[str, str | int]] = {
     "HAM10000_metadata.tab": {
         "file_id": 4338392,
-        "md5": "8f85fb1aa29d80a2797247e434deb79d",
+        # Dataverse serves ingested TSV by default (md5 below); ?format=original CSV is 8f85fb1a...
+        "md5": "1d13fed99da9c3e925fb523df87d527e",
     },
     "HAM10000_images_part_1.zip": {
         "file_id": 3172585,
