@@ -2,6 +2,25 @@
 \toprule
 \textbf{Attribute} & \textbf{Subgroup} & \textbf{N} & \textbf{Sens.} & \textbf{Spec.} & \textbf{AUC} & \textbf{Status} \\
 \midrule
-\multicolumn{7}{c}{\textit{Pending ROCm evaluation run.}} \\
+age\_group & 40-59 & 666 & 91.8\% & 84.5\% & 0.946 & OK \\
+age\_group & 60-74 & 320 & 93.5\% & 66.5\% & 0.906 & OK \\
+age\_group & <40 & 286 & 68.8\% & 81.9\% & 0.847 & ALERT \\
+age\_group & >=75 & 212 & 96.1\% & 60.0\% & 0.864 & OK \\
+sex & female & 680 & 91.4\% & 82.4\% & 0.944 & OK \\
+sex & male & 804 & 92.5\% & 74.1\% & 0.911 & OK \\
+localization\_group & acral\_special & 81 & 100.0\% & 86.1\% & 0.994 & OK \\
+localization\_group & head\_neck & 200 & 93.2\% & 68.3\% & 0.890 & OK \\
+localization\_group & lower\_extremity & 279 & 92.7\% & 82.4\% & 0.949 & OK \\
+localization\_group & trunk & 758 & 91.4\% & 77.9\% & 0.925 & OK \\
+localization\_group & unknown & 45 & 0.0\% & 73.3\% & -- & OK \\
+localization\_group & upper\_extremity & 133 & 90.3\% & 76.5\% & 0.886 & OK \\
+dx\_type & confocal & 21 & 0.0\% & 85.7\% & -- & OK \\
+dx\_type & consensus & 148 & 0.0\% & 78.4\% & -- & OK \\
+dx\_type & follow\_up & 552 & 0.0\% & 98.6\% & -- & OK \\
+dx\_type & histo & 775 & 92.0\% & 54.9\% & 0.850 & OK \\
+dataset & rosendahl & 341 & 92.9\% & 44.7\% & 0.850 & OK \\
+dataset & vidir\_modern & 519 & 92.1\% & 67.4\% & 0.873 & OK \\
+dataset & vidir\_molemax & 577 & 80.0\% & 98.4\% & 0.985 & ALERT \\
+dataset & vienna\_dias & 59 & 83.3\% & 69.8\% & 0.928 & OK \\
 \bottomrule
 \end{tabular}

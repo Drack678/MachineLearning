@@ -2,6 +2,10 @@
 \toprule
 \textbf{Mode} & \textbf{Case ID} & \textbf{Error (P(mal))} & \textbf{Root Archetype} & \textbf{Clinician Catch Mechanism} \\
 \midrule
-\multicolumn{5}{c}{\textit{Pending ROCm interpretability run.}} \\
+FM1 (FN) & ISIC\_0028056 & MEL $\to$ NV (0.01) & Artifact / Border Shortcut Attention & Visualizing the Grad-CAM map immediately exposes off-lesion activation at image borders, prompting clinician override and standard dermoscopic inspection. \\
+FM2 (FN) & ISIC\_0034222 & MEL $\to$ NV (0.02) & Artifact / Border Shortcut Attention & Visualizing the Grad-CAM map immediately exposes off-lesion activation at image borders, prompting clinician override and standard dermoscopic inspection. \\
+FM3 (FN) & ISIC\_0028677 & BCC $\to$ NV (0.02) & Rare Non-Melanoma Malignancy False Negative & Examine vascular arborizing patterns or scaling under polarized dermoscopy and flag elderly sun-exposed sites (head/neck) for heightened suspicion. \\
+FM4 (FN) & ISIC\_0026275 & BCC $\to$ BKL (0.02) & Artifact / Border Shortcut Attention & Visualizing the Grad-CAM map immediately exposes off-lesion activation at image borders, prompting clinician override and standard dermoscopic inspection. \\
+FM5 (FN) & ISIC\_0034064 & MEL $\to$ NV (0.03) & Artifact / Border Shortcut Attention & Visualizing the Grad-CAM map immediately exposes off-lesion activation at image borders, prompting clinician override and standard dermoscopic inspection. \\
 \bottomrule
 \end{tabular}

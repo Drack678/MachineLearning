@@ -2,6 +2,30 @@
 \toprule
 \textbf{Stage} & \textbf{Model / Benchmark} & \textbf{Transfer Verdict} & \textbf{Key Reported Metrics} \\
 \midrule
-\multicolumn{4}{c}{\textit{Pending ROCm evaluation run.}} \\
+W1 (Original) & W1 logistic\_sgd\_balanced & Methodology only (GroupSplit) & Acc=0.3025, F1-mac=0.1222, AUC=0.8808, BPC=3.620 \\
+W1 (Original) & W1 complement\_nb & Methodology only (GroupSplit) & Acc=0.3351, F1-mac=0.0711, AUC=0.8492, BPC=5.734 \\
+W1 (Original) & W1 linear\_huber\_balanced & Methodology only (GroupSplit) & Acc=0.2943, F1-mac=0.1208, AUC=0.7858, BPC=7.811 \\
+W2 (Original) & Majority class (space) & Hybrid Arch + Logit Adj transferred & Acc=0.1865, Top5=0.4566, F1-mac=0.0044, BPC=4.4975, ECE=0.0010 \\
+W2 (Original) & Transformer W2 (calibrated, tau=0) & Hybrid Arch + Logit Adj transferred & Acc=0.6150, Top5=0.8799, F1-mac=0.3279, BPC=1.7995, ECE=0.0269 \\
+W2 (Original) & Transformer W2 (logit-adj, tau=0.10) & Hybrid Arch + Logit Adj transferred & Acc=0.6136, Top5=0.8795, F1-mac=0.3286, BPC=1.8036, ECE=0.0207 \\
+W3 (Original) & Double+Dueling DQN (W3) & Does NOT transfer (Honest Negative) & Return=+1.613, NewWord=0.928, Invalid=0.0006, Quality=-2.249 \\
+W4 (Original) & VAE (vae\_b0.5) + Anomaly & Adapted 1D->2D (MedConvVAE2D) & ReconAcc=0.6524, CE=1.095, Anom PR-AUC=1.0000, F1=0.9995 \\
+W5 (Original) & W5 Transformer (real\_only) & Adapted 1D->2D (cWGAN-GP, A4) & BPC=1.8233, Acc=0.6098, F1-cal=0.3185, F1-adj=0.3210 \\
+W5 (Original) & W5 Transformer (wgan\_gp\_filtered) & Adapted 1D->2D (cWGAN-GP, A4) & BPC=1.8179, Acc=0.6105, F1-cal=0.3192, F1-adj=0.3203 \\
+W5 (Original) & W5 Transformer (char\_noise\_aug) & Adapted 1D->2D (cWGAN-GP, A4) & BPC=1.8204, Acc=0.6108, F1-cal=0.3412, F1-adj=0.3412 \\
+W6 (Medical) & a1\_resnet18\_imagenet\_finetune & Best Medical Model & BalAcc=0.765, MalAUC=0.925, PR-AUC=0.758, Sens@Scr=0.960, Spec@Scr=0.670, ECE=0.026 \\
+W6 (Medical) & a3\_resnet18\_no\_balance\_ce & Medical Ablation / Transfer & BalAcc=0.706, MalAUC=0.924, PR-AUC=0.766, Sens@Scr=0.946, Spec@Scr=0.701, ECE=0.021 \\
+W6 (Medical) & a3\_resnet18\_w2\_logit\_adj & Medical Ablation / Transfer & BalAcc=0.682, MalAUC=0.915, PR-AUC=0.719, Sens@Scr=0.928, Spec@Scr=0.713, ECE=0.025 \\
+W6 (Medical) & a4\_resnet18\_wgan\_gp\_aug & Medical Ablation / Transfer & BalAcc=0.763, MalAUC=0.913, PR-AUC=0.745, Sens@Scr=0.938, Spec@Scr=0.672, ECE=0.021 \\
+W6 (Medical) & a2\_resnet18\_no\_med\_preproc & Medical Ablation / Transfer & BalAcc=0.733, MalAUC=0.911, PR-AUC=0.723, Sens@Scr=0.967, Spec@Scr=0.639, ECE=0.017 \\
+W6 (Medical) & a1\_resnet18\_scratch & Medical Ablation / Transfer & BalAcc=0.625, MalAUC=0.856, PR-AUC=0.566, Sens@Scr=0.982, Spec@Scr=0.452, ECE=0.038 \\
+W6 (Medical) & a2\_med\_hybrid\_no\_med\_preproc & Medical Ablation / Transfer & BalAcc=0.543, MalAUC=0.856, PR-AUC=0.592, Sens@Scr=0.938, Spec@Scr=0.566, ECE=0.028 \\
+W6 (Medical) & a1\_med\_hybrid\_w2\_finetune & Medical Ablation / Transfer & BalAcc=0.620, MalAUC=0.847, PR-AUC=0.545, Sens@Scr=0.909, Spec@Scr=0.591, ECE=0.035 \\
+W6 (Medical) & a1\_med\_hybrid\_scratch & Medical Ablation / Transfer & BalAcc=0.590, MalAUC=0.837, PR-AUC=0.543, Sens@Scr=0.942, Spec@Scr=0.478, ECE=0.022 \\
+W6 (Medical) & a1\_med\_hybrid\_w2\_frozen & Honest Negative (Frozen W2) & BalAcc=0.598, MalAUC=0.831, PR-AUC=0.517, Sens@Scr=0.946, Spec@Scr=0.516, ECE=0.039 \\
+W6 (Medical) & w4\_med\_conv\_vae2d & Unsupervised Anomaly/OOD Baseline & MalAUC=0.719, PR-AUC=0.348, Sens=0.674, Spec=0.666 \\
+Literature (Human) & 511 Human Readers (283 Board-Certified Dermatologists, Tschandl et al. 2019 Lancet Oncol.) & Clinical Gold Reference & Mean correct dx: 17.91/30 (59.7\%); Expert >10y: 18.78/30 (62.6\%); Malignancy Sens ~89\%, Spec ~75\% \\
+Literature (ML) & ISIC 2018 Task 3 Challenge Top-1 Ensemble (Codella et al. 2019 / Tschandl et al. 2019) & Published Benchmark & Balanced Multi-class Acc: 0.885 (leaderboard top-1); Mean top-3 AI: 25.43/30 correct \\
+Literature (ML) & ResNet-18 (224x224) MedMNIST v2 Baseline (Yang et al. 2023 Scientific Data) & Published Benchmark & Test Acc: 0.754 | OvR ROC-AUC: 0.920 \\
 \bottomrule
 \end{tabular}

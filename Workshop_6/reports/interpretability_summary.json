@@ -1,0 +1,9 @@
+{
+  "primary_model": "a1_resnet18_imagenet_finetune",
+  "n_cases_evaluated": 15,
+  "mean_energy_in_lesion": 0.49324994394735633,
+  "pointing_game_accuracy": 0.7333333333333333,
+  "mean_saliency_iou_05": 0.3477534126064885,
+  "mean_border_energy_ratio": 0.08370024696139691,
+  "failure_modes_documented": 5
+}

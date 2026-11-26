@@ -2,6 +2,15 @@
 \toprule
 \textbf{Model / Ablation} & \textbf{Params} & \textbf{Bal. Acc} & \textbf{Macro-F1} & \textbf{Mal. AUC} & \textbf{PR-AUC} & \textbf{Sens@Scr} & \textbf{ECE} \\
 \midrule
-\multicolumn{8}{c}{\textit{Run \texttt{scripts/run\_all\_rocm.sh} to populate test metrics.}} \\
+a1\_resnet18\_imagenet\_finetune & 11.18M & 0.765 & 0.724 & 0.925 & 0.758 & 96.0\% & 0.026 \\
+a3\_resnet18\_no\_balance\_ce & 11.18M & 0.706 & 0.723 & 0.924 & 0.766 & 94.6\% & 0.021 \\
+a3\_resnet18\_w2\_logit\_adj & 11.18M & 0.682 & 0.672 & 0.915 & 0.719 & 92.8\% & 0.025 \\
+a4\_resnet18\_wgan\_gp\_aug & 11.18M & 0.763 & 0.683 & 0.913 & 0.745 & 93.8\% & 0.021 \\
+a2\_resnet18\_no\_med\_preproc & 11.18M & 0.733 & 0.670 & 0.911 & 0.723 & 96.7\% & 0.017 \\
+a1\_resnet18\_scratch & 11.18M & 0.625 & 0.524 & 0.856 & 0.566 & 98.2\% & 0.038 \\
+a2\_med\_hybrid\_no\_med\_preproc & 3.75M & 0.543 & 0.498 & 0.856 & 0.592 & 93.8\% & 0.028 \\
+a1\_med\_hybrid\_w2\_finetune & 3.75M & 0.620 & 0.503 & 0.847 & 0.545 & 90.9\% & 0.035 \\
+a1\_med\_hybrid\_scratch & 3.75M & 0.590 & 0.498 & 0.837 & 0.543 & 94.2\% & 0.022 \\
+a1\_med\_hybrid\_w2\_frozen & 0.59M & 0.598 & 0.491 & 0.831 & 0.517 & 94.6\% & 0.039 \\
 \bottomrule
 \end{tabular}

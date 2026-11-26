@@ -2,6 +2,9 @@
 \toprule
 \textbf{Clinical Shift Scenario} & \textbf{Pred PSI} & \textbf{KS Stat} & \textbf{Mal. AUC} & \textbf{Sens.} & \textbf{Trigger} \\
 \midrule
-\multicolumn{6}{c}{\textit{Pending ROCm evaluation run.}} \\
+In-Distribution Control (No Shift) & 0.010 & 0.032 & 0.940 & 91.6\% & OK \\
+New Dermatoscope Color/Illumination Shift & 0.164 & 0.195 & 0.873 & 55.4\% & INVESTIGATE \\
+Optical Defocus / Motion Blur (sigma=2.4) & 0.485 & 0.175 & 0.819 & 56.6\% & RETRAIN\_ALERT \\
+Under-Exposure + Sensor Noise (-32\% gain) & 1.733 & 0.313 & 0.578 & 15.7\% & RETRAIN\_ALERT \\
 \bottomrule
 \end{tabular}

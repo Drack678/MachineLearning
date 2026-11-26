@@ -1,0 +1,32 @@
+{
+  "age_group": {
+    "disparate_impact_ratio": 0.347465034965035,
+    "equal_opportunity_gap": 0.273538961038961,
+    "fpr_gap": 0.24485666104553117,
+    "equalized_odds_gap": 0.273538961038961
+  },
+  "sex": {
+    "disparate_impact_ratio": 0.7694677871148459,
+    "equal_opportunity_gap": 0.011206896551724133,
+    "fpr_gap": 0.0837848552927184,
+    "equalized_odds_gap": 0.0837848552927184
+  },
+  "localization_group": {
+    "disparate_impact_ratio": 0.29448408653301616,
+    "equal_opportunity_gap": 0.02920662598081958,
+    "fpr_gap": 0.17821981113120355,
+    "equalized_odds_gap": 0.17821981113120355
+  },
+  "dx_type": {
+    "disparate_impact_ratio": 0.023448609724365375,
+    "equal_opportunity_gap": 0.0,
+    "fpr_gap": 0.4364090499840261,
+    "equalized_odds_gap": 0.4364090499840261
+  },
+  "dataset": {
+    "disparate_impact_ratio": 0.03255441647328379,
+    "equal_opportunity_gap": 0.12857142857142856,
+    "fpr_gap": 0.5377541063587575,
+    "equalized_odds_gap": 0.5377541063587575
+  }
+}
