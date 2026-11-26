@@ -23,6 +23,8 @@ from Workshop_6.src.transfer import (  # noqa: E402
     MedConvVAE2D,
     MedHybridTransformer,
     ResNet18Medical,
+    SyntheticImageDataset,
+    build_filtered_synthetic_dataset,
     build_medical_classifier,
     gradient_penalty_2d,
     vae_kl_free_bits,
@@ -126,3 +128,45 @@ def test_w5_cond_wgan_gp_2d_second_order_gradient_penalty() -> None:
     assert torch.isfinite(gp) and torch.isfinite(c_loss)
     c_loss.backward()
     assert any(p.grad is not None and torch.isfinite(p.grad).all() for p in critic.parameters())
+
+
+class _MockIntLabelDataset(torch.utils.data.Dataset):
+    """Mimics `HAM10000Dataset` returning `(Tensor, int)`."""
+
+    def __init__(self, n: int = 12, image_size: int = 64) -> None:
+        self.x = torch.randn(n, 3, image_size, image_size)
+        self.y = [i % NUM_CLASSES for i in range(n)]
+
+    def __len__(self) -> int:
+        return len(self.y)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        return self.x[idx], int(self.y[idx])
+
+
+def test_concat_ham10000_and_synthetic_dataset_collates_cleanly() -> None:
+    # Regression test for A4: ConcatDataset([HAM10000Dataset, build_filtered_synthetic_dataset])
+    # must collate cleanly across mixed batches without Tensor-vs-int TypeError.
+    gen = CondGen2D(num_classes=NUM_CLASSES, noise_dim=16, class_emb_dim=8, base_ch=8)
+    clf = ResNet18Medical(num_classes=NUM_CLASSES, pretrained=False)
+    syn_ds = build_filtered_synthetic_dataset(
+        gen,
+        clf,
+        minority_class_ids=(0, 4),
+        samples_per_class=4,
+        oversample_factor=2,
+        image_size=64,
+        seed=42,
+    )
+    assert isinstance(syn_ds, SyntheticImageDataset)
+    img0, lbl0 = syn_ds[0]
+    assert isinstance(img0, torch.Tensor) and isinstance(lbl0, int)
+
+    real_ds = _MockIntLabelDataset(n=10, image_size=64)
+    combined = torch.utils.data.ConcatDataset([real_ds, syn_ds])
+    loader = torch.utils.data.DataLoader(combined, batch_size=6, shuffle=True)
+    seen = 0
+    for xb, yb in loader:
+        assert xb.ndim == 4 and yb.dtype == torch.long
+        seen += xb.size(0)
+    assert seen == len(real_ds) + len(syn_ds)

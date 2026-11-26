@@ -1174,6 +1174,25 @@ def _save_gan_sample_grid(gen: CondGen2D, device: torch.device, out_path: Path) 
     plt.close(fig)
 
 
+class SyntheticImageDataset(Dataset):
+    """Dataset of pre-normalized synthetic images returning `(Tensor, int)` to match `HAM10000Dataset`."""
+
+    def __init__(self, images: torch.Tensor, labels: torch.Tensor | list[int]) -> None:
+        self.images = images.detach().cpu().float()
+        if isinstance(labels, torch.Tensor):
+            self.labels = [int(v) for v in labels.detach().cpu().tolist()]
+        else:
+            self.labels = [int(v) for v in labels]
+        if len(self.images) != len(self.labels):
+            raise ValueError("images and labels must have matching length")
+
+    def __len__(self) -> int:
+        return len(self.labels)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        return self.images[idx], self.labels[idx]
+
+
 @torch.inference_mode()
 def build_filtered_synthetic_dataset(
     gen: CondGen2D,
@@ -1187,7 +1206,7 @@ def build_filtered_synthetic_dataset(
     std: list[float] | tuple[float, float, float] = IMAGENET_STD,
     device: torch.device | None = None,
     seed: int = SEED,
-) -> TensorDataset:
+) -> SyntheticImageDataset:
     """Generate rare-class images with W5 cWGAN-GP and keep top-50% by classifier confidence."""
     seed_everything(seed, deterministic=True)
     dev = device if device is not None else torch.device("cpu")
@@ -1219,7 +1238,7 @@ def build_filtered_synthetic_dataset(
         kept_imgs.append(normed[top_idx])
         kept_lbls.append(torch.full((len(top_idx),), cid, dtype=torch.long))
 
-    return TensorDataset(torch.cat(kept_imgs, dim=0), torch.cat(kept_lbls, dim=0))
+    return SyntheticImageDataset(torch.cat(kept_imgs, dim=0), torch.cat(kept_lbls, dim=0))
 
 
 # ---------------------------------------------------------------------------
@@ -1308,29 +1327,34 @@ def run_ablation_suite(args: argparse.Namespace) -> None:
 
     tr_pre, va_pre = make_datasets(enable_preproc=True)
     tr_raw, va_raw = make_datasets(enable_preproc=False)
-    summary_rows: list[dict[str, Any]] = []
+    summary_csv_path = REPORTS_DIR / "ablation_val_summary.csv"
+    summary_rows: list[dict[str, Any]] = (
+        pd.read_csv(summary_csv_path).to_dict(orient="records")
+        if summary_csv_path.exists()
+        else []
+    )
 
     def record(ablation_id: str, label: str, res: dict[str, Any]) -> None:
         m = res["metadata"]
         vs = m["val_summary"]
-        summary_rows.append(
-            {
-                "ablation": ablation_id,
-                "run_name": m["run_name"],
-                "description": label,
-                "params": m["trainable_params"],
-                "best_epoch": m["train_hparams"]["best_epoch"],
-                "val_balanced_accuracy": vs["balanced_accuracy"],
-                "val_f1_macro": vs["f1_macro"],
-                "val_auc_roc_ovr_macro": vs["auc_roc_ovr_macro"],
-                "val_malignant_auc": vs["malignant_auc"],
-                "val_malignant_pr_auc": vs["malignant_pr_auc"],
-                "val_ece": vs["ece"],
-                "train_minutes": m["train_seconds"] / 60.0,
-                "checkpoint": res["checkpoint"],
-            }
-        )
-        pd.DataFrame(summary_rows).to_csv(REPORTS_DIR / "ablation_val_summary.csv", index=False)
+        new_row = {
+            "ablation": ablation_id,
+            "run_name": m["run_name"],
+            "description": label,
+            "params": m["trainable_params"],
+            "best_epoch": m["train_hparams"]["best_epoch"],
+            "val_balanced_accuracy": vs["balanced_accuracy"],
+            "val_f1_macro": vs["f1_macro"],
+            "val_auc_roc_ovr_macro": vs["auc_roc_ovr_macro"],
+            "val_malignant_auc": vs["malignant_auc"],
+            "val_malignant_pr_auc": vs["malignant_pr_auc"],
+            "val_ece": vs["ece"],
+            "train_minutes": m["train_seconds"] / 60.0,
+            "checkpoint": res["checkpoint"],
+        }
+        summary_rows[:] = [r for r in summary_rows if r.get("run_name") != m["run_name"]]
+        summary_rows.append(new_row)
+        pd.DataFrame(summary_rows).to_csv(summary_csv_path, index=False)
 
     w2_ckpt = Path(args.w2_ckpt) if args.w2_ckpt else W2_BEST_CHECKPOINT
     stage = args.run
