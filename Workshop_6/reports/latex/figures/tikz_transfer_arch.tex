@@ -1,0 +1,56 @@
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=0.85cm and 0.9cm,
+  box/.style={rectangle, rounded corners=3pt, draw=OkabeBlue, fill=BoxBg, thick, text width=3.2cm, align=center, minimum height=1.15cm, font=\small},
+  neg/.style={rectangle, rounded corners=3pt, draw=OkabeOrange, fill=orange!6, thick, dashed, text width=3.2cm, align=center, minimum height=1.05cm, font=\small},
+  med/.style={rectangle, rounded corners=3pt, draw=OkabeGreen, fill=teal!6, thick, text width=3.4cm, align=center, minimum height=1.15cm, font=\small},
+  arrow/.style={-{Stealth[length=2.4mm]}, thick, color=OkabeBlue},
+  negarrow/.style={-{Stealth[length=2.4mm]}, thick, dashed, color=OkabeOrange}
+]
+
+% Left column: W1-W5 components
+\node[box] (w1) {\textbf{W1: Leakage-Free Splits}\\ \footnotesize GroupShuffleSplit (char\_id)\\ Checksums + Pipelines};
+\node[box, below=of w1] (w2) {\textbf{W2: CharTransformer}\\ \footnotesize 4-Layer Pre-LN Blocks\\ AdamW + Logit Adj.};
+\node[box, below=of w2] (w4) {\textbf{W4: ResConv1d VAE}\\ \footnotesize GroupNorm + GELU\\ FiLM + Free Bits + KL};
+\node[box, below=of w4] (w5) {\textbf{W5: 1D WGAN-GP}\\ \footnotesize FP32 Gradient Penalty\\ Filtered Augmentation};
+\node[neg, below=of w5] (w3) {\textbf{W3: Double+Dueling DQN}\\ \footnotesize Lexical MDP + Gumbel-ST\\ Char Embeddings};
+
+% Middle column: Adaptation mechanism
+\node[med, right=1.3cm of w1] (a1) {\textbf{Lesion-Grouped Splits}\\ \footnotesize GroupShuffleSplit (lesion\_id)\\ DullRazor + Shades of Gray};
+\node[med, right=1.3cm of w2] (a2) {\textbf{MedHybridTransformer}\\ \footnotesize ConvStem2D (14$\times$14) +\\ Bidirectional W2 Blocks};
+\node[med, right=1.3cm of w4] (a4) {\textbf{MedConvVAE2D}\\ \footnotesize Benign-Only Training\\ L1+MSE + KL Anomaly};
+\node[med, right=1.3cm of w5] (a5) {\textbf{MedCondWGANGP2D}\\ \footnotesize Class-Conditional 64$\times$64\\ Tanh Output (Ablation 4)};
+\node[neg, right=1.3cm of w3] (a3) {\textbf{Discarded / Negative Control}\\ \footnotesize Frozen W2 Blocks (A1)\\ DQN \& Gumbel-ST Excluded};
+
+% Right column: Clinical evaluation & XAI
+\node[box, draw=OkabePurple, fill=purple!5, right=1.3cm of a2, yshift=-0.8cm, text width=3.5cm, minimum height=3.8cm] (eval) {
+  \textbf{Clinical Integration}\\[4pt]
+  \footnotesize
+  $\bullet$ Sens/Spec/PPV/NPV\\
+  $\bullet$ 3 Operating Thresholds\\
+  $\bullet$ Temp. Scaling \& DCA\\
+  $\bullet$ Subgroup Fairness Audit\\
+  $\bullet$ Grad-CAM + Attn Rollout\\
+  $\bullet$ Lesion Mask Alignment\\
+  $\bullet$ PSI/KS Drift Monitoring
+};
+
+\draw[arrow] (w1) -- node[above, font=\scriptsize]{1:1} (a1);
+\draw[arrow] (w2) -- node[above, font=\scriptsize]{Hybrid} (a2);
+\draw[arrow] (w4) -- node[above, font=\scriptsize]{1D$\to$2D} (a4);
+\draw[arrow] (w5) -- node[above, font=\scriptsize]{1D$\to$2D} (a5);
+\draw[negarrow] (w3) -- node[above, font=\scriptsize, color=OkabeOrange]{Rejected} (a3);
+
+\draw[arrow] (a1.east) -- ++(0.45,0) |- (eval.west);
+\draw[arrow] (a2.east) -- (eval.west |- a2);
+\draw[arrow] (a4.east) -- (eval.west |- a4);
+\draw[arrow] (a5.east) -- ++(0.45,0) |- (eval.west);
+\draw[negarrow] (a3.east) -- ++(0.45,0) |- ([yshift=-1.3cm]eval.west);
+
+\end{tikzpicture}
+}
+\caption{\textbf{Domain transfer architecture from Workshops 1--5 (Shakespeare text) to Workshop 6 (HAM10000 dermoscopy).} Solid blue/green paths denote verified methodological or architectural adaptations; dashed orange paths represent honest negative transfers documented empirically (frozen W2 text blocks in Ablation~1) or rejected on structural grounds (W3 lexical DQN, discrete character embeddings, and Gumbel-Softmax straight-through estimation).}
+\label{fig:transfer_architecture}
+\end{figure}

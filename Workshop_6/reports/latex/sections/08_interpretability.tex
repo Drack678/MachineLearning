@@ -1,0 +1,39 @@
+\section{Interpretability Analysis}
+\label{sec:interpretability}
+
+\subsection{Visual Explanation Methods: Grad-CAM and Transformer Attention Rollout}
+In clinical dermatology, a black-box malignancy probability without spatial grounding cannot be safely audited at the point of care~\cite{Samek2021explaining,Caruana2015intelligible}. Because our adapted architectures span both convolutional backbones (\texttt{ResNet18Medical}) and hybrid CNN-Transformer networks (\texttt{MedHybridTransformer}), \texttt{src/interpretability.py} implements two complementary attribution mechanisms:
+
+\begin{enumerate}
+  \item \textbf{Grad-CAM~\cite{Selvaraju2017grad}:} Given target class score $y^c$ and final spatial feature maps $A^k \in \mathbb{R}^{H'\times W'}$ (from \texttt{layer4[-1]} in \texttt{ResNet-18} or \texttt{stem.stage4[0]} in \texttt{MedHybridTransformer}), channel importance weights are computed via global average pooling of gradients, $\alpha_k^c = \frac{1}{H'W'}\sum_{i,j}\frac{\partial y^c}{\partial A_{ij}^k}$, yielding the non-negative saliency map $L_{\text{Grad-CAM}}^c = \mathrm{ReLU}\!\left(\sum_k \alpha_k^c A^k\right)$ upsampled to $224\times 224$. Forward and backward hooks are cleaned up deterministically inside \texttt{finally} blocks.
+  \item \textbf{Transformer Attention Rollout~\cite{Abnar2020quantifying}:} For \texttt{MedHybridTransformer}, we extract the multi-head self-attention matrices $W^{(\ell)} \in \mathbb{R}^{H\times N\times N}$ across all four Workshop~2-adapted Pre-LN layers ($\ell=1\dots 4$), average across heads, account for residual skip connections via $\tilde{A}^{(\ell)} = 0.5\,\bar{W}^{(\ell)} + 0.5\,I$ (row-normalized), and recursively multiply $\hat{A} = \tilde{A}^{(4)}\tilde{A}^{(3)}\tilde{A}^{(2)}\tilde{A}^{(1)}$. Reading the \texttt{[CLS]} row over spatial patch tokens ($14\times 14$) produces a global attention attribution map showing whether long-range Transformer self-attention attends to lesion borders and pigment networks.
+\end{enumerate}
+
+\subsection{Quantitative Anatomical Alignment Against Ground-Truth Lesion Masks}
+Visual inspection of heatmaps alone is vulnerable to confirmation bias~\cite{Ghassemi2021false}. Using the official Tschandl pixel-level lesion segmentation masks distributed with HAM10000 (\texttt{HAM10000\_segmentations\_lesion\_tschandl.zip}), we validate saliency alignment quantitatively across 15 stratified test cases (5 confident True Positives, 5 highest-risk False Negatives, and 5 highest-confidence False Positives) using four objective metrics:
+\begin{itemize}
+  \item \textbf{Energy-in-Lesion Ratio:} Fraction of total saliency mass falling inside the ground-truth lesion mask $M$: $\sum_{x\in M} S(x) / \sum_x S(x)$. Across the 15 evaluated test cases, our model achieves a mean Energy-in-Lesion Ratio of \WSixXaiLesionEnergy{}.
+  \item \textbf{Pointing Game Accuracy:} Fraction of cases whose peak saliency pixel $\arg\max_x S(x)$ lies strictly inside $M$ (observed: \WSixXaiPointingAcc{}).
+  \item \textbf{Saliency-Mask IoU@0.5:} Intersection-over-Union between thresholded saliency $\{S \ge 0.5\}$ and lesion mask $M$ (observed: \WSixXaiIoU{}).
+  \item \textbf{Border Shortcut Ratio:} Saliency mass concentrated in the outer 12\% image frame (observed: \WSixXaiBorderEnergy{}), specifically designed to flag shortcut learning on circular dermoscope rims, dark corners, or ruler tick marks.
+\end{itemize}
+
+\subsection{Qualitative Evaluation and Five Concrete Failure Modes}
+For every selected test case, \texttt{src/interpretability.py} generates a four-panel clinical audit card under \texttt{reports/figures/interpretability/} displaying (1)~the dermoscopic image overlaid with the ground-truth lesion contour and patient metadata (\texttt{age\_group}, \texttt{sex}, \texttt{dx\_type}), (2)~top-3 class probabilities and calibrated malignancy risk relative to the operating threshold, (3)~Grad-CAM localization, and (4)~Workshop~2 Hybrid Attention Rollout. True positive melanomas and basal cell carcinomas consistently localize to asymmetric pigmented networks, atypical globules, and ulcerated vascular cores.
+
+Equally critical for clinical safety, we systematically isolate \textbf{five concrete failure modes} from the test set (Figure~\ref{fig:failure_modes} and Table~\ref{tab:failure_modes}) covering missed melanomas, rare non-melanoma malignancies, pigmented benign keratosis false positives, border/artifact shortcut activations, and subgroup underperformance. Each mode is paired with its patient-harm severity and a concrete clinical verification step allowing a dermatologist or primary-care physician to detect and override the algorithmic error.
+
+\begin{figure}[htbp]
+\centering
+\safeincludegraphics[0.92\textwidth]{../figures/failure_modes_grid.png}{Visual catalog of 5 concrete failure modes from the HAM10000 test split with Grad-CAM overlays and lesion/border energy diagnostics.}
+\caption{\textbf{Five concrete test-set failure modes with Grad-CAM attribution diagnostics.} Inspecting false negatives and false positives exposes morphological mimics and residual border shortcuts where clinicians must override the automated score.}
+\label{fig:failure_modes}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\caption{\textbf{Structured clinical catalog of five concrete test-set failure modes (\texttt{reports/failure\_modes\_catalog.json}).}}
+\label{tab:failure_modes}
+\scriptsize
+\input{tables/tab_failure_modes.tex}
+\end{table}

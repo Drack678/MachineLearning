@@ -1,0 +1,63 @@
+\section{Medical Evaluation}
+\label{sec:medical_evaluation}
+
+\subsection{Beyond Accuracy: Clinical Metrics and Probability Calibration}
+Aggregate accuracy is actively misleading on imbalanced medical datasets. Because benign melanocytic nevi (\texttt{nv}) represent 67.0\% of HAM10000, a degenerate classifier that ignores every cancer achieves 67\% accuracy while missing 100\% of melanomas and carcinomas. Following the STARD~2015 diagnostic accuracy standard~\cite{Bossuyt2015stard} and the TRIPOD+AI prediction reporting guideline~\cite{Collins2024tripod}, our evaluation module (\texttt{src/medical\_metrics.py} and \texttt{src/evaluate\_medical.py}) evaluates every saved checkpoint strictly on the untouched lesion-grouped test split (\WSixTestImgs{} images from \WSixTestLesions{} unseen lesions) along four complementary clinical axes:
+
+\begin{enumerate}
+  \item \textbf{Seven-Class Diagnostic Discrimination:} Balanced multi-class accuracy (macro-recall across all 7 categories, the official ISIC~2018 leaderboard metric~\cite{Codella2019skin}), macro-F1, macro one-vs-rest ROC-AUC, and macro PR-AUC, ensuring rare pathologies (\texttt{df}, \texttt{vasc}, \texttt{akiec}) carry equal weight to common nevi.
+  \item \textbf{Clinical Malignancy Triage:} Aggregating posterior probability across malignant and premalignant lesions, $P(\text{malignant}) = P(\texttt{akiec}) + P(\texttt{bcc}) + P(\texttt{mel})$, we report sensitivity (recall), specificity, positive predictive value (PPV), negative predictive value (NPV), AUC-ROC, PR-AUC, and expected false negatives and false positives per 1,000 screened patients.
+  \item \textbf{Probabilistic Calibration:} Deep neural networks trained with class-balanced focal losses often produce miscalibrated confidences~\cite{Guo2017calibration}. We fit a single scalar temperature $T > 0$ via L-BFGS minimizing validation negative log-likelihood, then verify post-calibration Expected Calibration Error (15-bin ECE) and Brier score on the test split.
+  \item \textbf{Clinical Utility via Decision Curve Analysis (DCA):} Following Vickers and Elkin~\cite{Vickers2006decision}, we quantify Net Benefit across threshold probabilities $p_t \in [0.02, 0.50]$:
+  \begin{equation}
+    \mathrm{NB}(p_t) = \frac{\mathrm{TP}}{N} - \frac{\mathrm{FP}}{N}\left(\frac{p_t}{1 - p_t}\right),
+  \end{equation}
+  comparing the calibrated model against the two default clinical extremes—\emph{Biopsy All} ($\mathrm{NB}_{\text{all}} = \pi - (1-\pi)\frac{p_t}{1-p_t}$) and \emph{Biopsy None} ($\mathrm{NB}_{\text{none}} = 0$)—where $p_t$ encodes a clinician's trade-off between missing one malignancy and performing $\frac{1-p_t}{p_t}$ unnecessary biopsies.
+\end{enumerate}
+
+\subsection{Threshold Analysis Across Clinical Operating Points}
+Clinicians cannot deploy a hard-coded $0.50$ probability cutoff across all settings. Primary-care teledermatology prioritizes ruling out lethal melanoma (high sensitivity and high NPV), whereas specialty excision planning balances biopsy burden (higher specificity and PPV). We select three thresholds strictly on the validation set—(1)~High-Sensitivity Screening ($\text{Sens}_{\text{val}} \ge 95\%$), (2)~Balanced Youden's $J$ ($\arg\max(\text{Sens}+\text{Spec}-1)$), and (3)~High-Specificity Confirmation ($\text{Spec}_{\text{val}} \ge 90\%$)—and evaluate them unchanged on the held-out test set with 1,000-replicate stratified bootstrap 95\% confidence intervals. Table~\ref{tab:thresholds} reports test operating performance for our best model (\WSixBestModel{}).
+
+\begin{table}[htbp]
+\centering
+\caption{\textbf{Clinical threshold analysis on the untouched HAM10000 test split for \WSixBestModel{}.} All thresholds are fixed strictly on validation; 95\% CIs are computed via stratified bootstrapping.}
+\label{tab:thresholds}
+\small
+\input{tables/tab_thresholds.tex}
+\end{table}
+
+Figure~\ref{fig:roc_pr} compares test-set malignancy ROC and Precision--Recall curves across our adapted classifiers and the unsupervised Workshop~4 \texttt{MedConvVAE2D} anomaly detector. Figure~\ref{fig:cal_dca} presents reliability diagrams before and after temperature scaling alongside Decision Curve Analysis confirming positive net benefit across clinically realistic biopsy thresholds ($p_t \in [0.05, 0.45]$). Figure~\ref{fig:cm_best} shows the normalized 7-class test confusion matrix, highlighting primary inter-class confusions (primarily between melanoma, pigmented benign keratoses \texttt{bkl}, and atypical nevi \texttt{nv}).
+
+\begin{figure}[htbp]
+\centering
+\safeincludegraphics[0.96\textwidth]{../figures/roc_pr_curves.png}{Test-set ROC and Precision-Recall curves for malignancy detection across W6 transfer models and W4 VAE anomaly scorer.}
+\caption{\textbf{Malignancy detection ROC and Precision--Recall curves on the lesion-grouped HAM10000 test set.} Curves compare adapted W2 hybrid Transformers, ImageNet-pretrained and scratch ResNet-18 baselines, and the benign-trained W4 2D VAE anomaly detector.}
+\label{fig:roc_pr}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\safeincludegraphics[0.96\textwidth]{../figures/calibration_dca_curves.png}{Reliability diagram (uncalibrated vs temperature-scaled) and Decision Curve Analysis (Net Benefit vs Biopsy-All and Biopsy-None).}
+\caption{\textbf{Probabilistic calibration and clinical net benefit for \WSixBestModel{}.} Left: quantile reliability curve before and after validation-fitted temperature scaling~\cite{Guo2017calibration}. Right: Decision Curve Analysis~\cite{Vickers2006decision} verifying net clinical utility over biopsy-all and biopsy-none policies.}
+\label{fig:cal_dca}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\safeincludegraphics[0.64\textwidth]{../figures/confusion_matrix_best.png}{Row-normalized 7-class confusion matrix on the HAM10000 test set.}
+\caption{\textbf{Normalized 7-class confusion matrix on the untouched test split.} Diagonal entries correspond to per-class recall (balanced accuracy equals the mean of the diagonal).}
+\label{fig:cm_best}
+\end{figure}
+
+\subsection{Master Comparison Table (Workshops 1--6, Published Benchmarks, and Clinicians)}
+Table~\ref{tab:master_w1_w6} consolidates every stage of Group~8's semester progression—original-domain Shakespeare baselines (W1--W5), adapted medical architectures and ablations (W6), peer-reviewed HAM10000 / ISIC~2018 / DermaMNIST benchmarks~\cite{Codella2019skin,Yang2023medmnist}, and international human reader accuracy from 511 clinicians (283 board-certified dermatologists)~\cite{Tschandl2019comparison}. All Workshop~1--5 and Workshop~6 entries are generated directly from verified repository CSV outputs without manual transcription.
+
+\begin{table}[htbp]
+\centering
+\caption{\textbf{Master results comparison across Workshops 1--6, published medical imaging benchmarks, and human dermatologists.} All reported W6 metrics are reproducible directly from submitted checkpoints via \texttt{src/evaluate\_medical.py}.}
+\label{tab:master_w1_w6}
+\scriptsize
+\input{tables/tab_master_w1_w6.tex}
+\end{table}
+
+Interpreting Table~\ref{tab:master_w1_w6} requires clinical restraint. While modern CNNs and hybrid models match or exceed average single-image specific diagnosis accuracy of human readers in isolated web tests~\cite{Tschandl2019comparison,Brinker2019deep}, real dermatologists incorporate tactile examination, lesion growth history, total-body comparison, and out-of-distribution judgment that single-frame classifiers lack. Comparing single-backbone models trained exclusively on HAM10000 against ISIC~2018 top-1 leaderboard ensembles ($0.885$ balanced accuracy using multi-backbone ensembles and external datasets) also clarifies the gap between lightweight reproducible single models ($15$--$44$~MB checkpoints) and competition ensembles.

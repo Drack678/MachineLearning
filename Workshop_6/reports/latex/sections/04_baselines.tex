@@ -1,0 +1,36 @@
+\section{Baseline Methods}
+\label{sec:baselines}
+
+\subsection{Workshop 1 Baselines in the Original Domain (Shakespeare Text)}
+Workshop~1 established the data governance and classical baseline layer for Group~8 on the \texttt{flwrlabs/shakespeare} dataset~\cite{Caldas2018leaf} (4,226,158 raw rows reduced to 4,224,713 after removing 1,445 exact duplicates). Exploratory analysis revealed two structural hazards that directly shaped our medical engineering protocol: (1)~consecutive rows belonging to the same theatrical character share 79 of 80 input characters (98.75\% overlap), rendering random row splitting completely invalid; and (2)~target frequencies span a 791,902:1 imbalance ratio (space character at 18.74\% vs.\ rare digits at 0.0011\%, unconditional entropy $H(y)=4.5002$~bits).
+
+To eliminate data leakage, Workshop~1 partitioned the 1,129 characters via two-stage \texttt{GroupShuffleSplit} (790~train, 169~val, 170~test characters; zero pairwise character overlap) and constructed the 76-token vocabulary strictly on the training split. Three leakage-free \texttt{scikit-learn} pipelines combined TF-IDF character 1--5-grams (up to 50,000 sparse features over the trailing 20 characters), positional one-hot encodings of the final 5 characters, and 8 morphological indicators, tuned with 3-fold \texttt{GroupKFold} on 299,966 stratified training rows and evaluated on the full 644,398-row test split. Table~\ref{tab:w1_baselines} reports the exact persisted test results from \texttt{Workshop\_1/reports/baselines\_summary.csv} alongside the majority-class benchmark from Workshop~2.
+
+\begin{table}[htbp]
+\centering
+\caption{\textbf{Workshop 1 classical baselines on the original \texttt{flwrlabs/shakespeare} test split (644,398 rows, 170 unseen characters).} Metrics are loaded verbatim from persisted repository CSV reports.}
+\label{tab:w1_baselines}
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+\textbf{Model (Original Domain)} & \textbf{Acc} & \textbf{Top-5} & \textbf{Macro-F1} & \textbf{PR-AUC} & \textbf{ROC-AUC} & \textbf{BPC $\downarrow$} \\
+\midrule
+Majority class (\texttt{<space>}) & 18.65\% & 45.66\% & 0.0044 & 0.0156 & 0.5000 & 4.497 \\
+\texttt{logistic\_sgd\_balanced} & \WOneLogAcc{} & 61.62\% & \WOneLogFOne{} & 0.1437 & 0.8808 & \WOneLogBPC{} \\
+\texttt{complement\_nb} & \WOneNBAcc{} & 66.94\% & \WOneNBFOne{} & 0.1149 & 0.8492 & 5.734 \\
+\texttt{linear\_huber\_balanced} & 29.43\% & 63.29\% & 0.1208 & 0.1320 & 0.7858 & 7.811 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+While balanced SGD logistic regression improved macro-F1 nearly 28-fold over the majority baseline (0.1222 vs.\ 0.0044) and cut bits-per-character (BPC) from 4.497 to 3.620, linear bag-of-n-gram models plateaued around 30--33\% accuracy because they cannot compose long-range syntactic or rhythmic dependencies.
+
+\subsection{Published Medical Imaging Benchmarks (HAM10000 / ISIC 2018 \& Human Readers)}
+To anchor our medical adaptation against rigorous clinical standards rather than internal baselines alone, we benchmark against four peer-reviewed reference studies on HAM10000 and ISIC~2018 Task~3:
+
+\begin{enumerate}
+  \item \textbf{Tschandl et al.\ (2018, \emph{Scientific Data})~\cite{Tschandl2018dataset}:} Introduced the multi-source HAM10000 dataset (10,015 dermatoscopic images from Vienna and Queensland across seven classes: \texttt{akiec}, \texttt{bcc}, \texttt{bkl}, \texttt{df}, \texttt{mel}, \texttt{nv}, \texttt{vasc}), establishing histopathologic verification for over 53\% of cases and flagging multiple views per \texttt{lesion\_id} as a mandatory grouping variable.
+  \item \textbf{Tschandl et al.\ (2019, \emph{The Lancet Oncology})~\cite{Tschandl2019comparison}:} Conducted a landmark international diagnostic study comparing 511 human readers from 63~countries—including 283 board-certified dermatologists—against 139 machine learning algorithms from the ISIC~2018 challenge on 30-image randomized batches. Across all 511 human readers, mean specific diagnosis accuracy was 17.91/30 (59.7\%); board-certified dermatologists with over 10~years of experience reached 18.78/30 (62.6\%), whereas the top three AI algorithms averaged 25.43/30 (84.8\%). On malignancy triage, dermatologists achieved high sensitivity ($\approx 89\%$) with moderate specificity ($\approx 75\%$), while algorithms experienced steeper accuracy drops on out-of-distribution clinical centers.
+  \item \textbf{Codella et al.\ (2019, ISIC~2018 Challenge)~\cite{Codella2019skin}:} Defined \emph{balanced multi-class accuracy} (arithmetic mean of per-class sensitivity across all 7 categories) as the primary challenge metric to penalize models that ignore rare pathologies (\texttt{df}, \texttt{vasc}, \texttt{akiec}). Top leaderboard ensembles utilizing external data and heavy multi-backbone test-time augmentation reached 0.885 balanced accuracy and $\approx 0.96$ mean ROC-AUC, while single standard CNN baselines without external data typically ranged between 0.72 and 0.80 balanced accuracy.
+  \item \textbf{Yang et al.\ (2023, \emph{Scientific Data}, MedMNIST v2)~\cite{Yang2023medmnist}:} Standardized HAM10000 as \texttt{DermaMNIST} at $28\times 28$ and $224\times 224$ resolutions. Their published \texttt{ResNet-18} ($224\times 224$) baseline achieved 75.4\% overall accuracy and 0.920 macro OvR ROC-AUC without dermoscopy-specific preprocessing or subgroup fairness analysis. Complementary clinical studies by Esteva et al.~\cite{Esteva2017dermatologist} and Brinker et al.~\cite{Brinker2019deep} further confirmed that CNNs can match or outperform dermatologists on static dermoscopic images, while Daneshjou et al.~\cite{Daneshjou2022disparities} exposed severe performance drops on darker Fitzpatrick V--VI skin tones underrepresented in ISIC archives.
+\end{enumerate}

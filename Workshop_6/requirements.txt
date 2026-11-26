@@ -1,0 +1,30 @@
+# Workshop 6 — Medical Domain Adaptation & Clinical Integration (HAM10000 / ISIC 2018)
+#
+# IMPORTANT: Do NOT overwrite your ROCm PyTorch wheel! Install PyTorch FIRST:
+#
+# === AMD Radeon RX 9060 XT (RDNA 4 / gfx1200, ROCm) ===
+#   python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ \
+#       "torch[device-gfx1200]" torchvision
+#   python -m pip install -r requirements.txt
+#   python -m pip install --no-deps -e ..
+#
+# === CPU / NVIDIA CUDA fallback ===
+#   python -m pip install torch torchvision
+#   python -m pip install -r requirements.txt
+
+numpy>=2.2,<3
+pandas>=2.2,<4
+pyarrow>=18.0
+scikit-learn>=1.6
+scipy>=1.14
+Pillow>=11.0
+opencv-python-headless>=4.10
+scikit-image>=0.25
+matplotlib>=3.9
+seaborn>=0.13
+pydicom==3.0.2
+requests>=2.32
+tqdm>=4.66
+tensorboard>=2.18
+pytest>=8.0
+ruff>=0.6

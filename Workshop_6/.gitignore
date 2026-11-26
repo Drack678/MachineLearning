@@ -1,0 +1,29 @@
+# Workshop 6 local ignores (keep checkpoints, splits, and reports trackable for v1.0-medical-final)
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Raw/processed image caches are large and reproducible via medical_preprocessing.py
+data/raw/
+data/processed/
+runs/
+
+# Explicitly preserve reproducible splits, medical checkpoints, figures, and final report
+!data/splits.json
+!checkpoints/
+!checkpoints/*.pt
+!checkpoints/*.meta.json
+!reports/
+
+# LaTeX build intermediates
+reports/latex/*.aux
+reports/latex/*.bbl
+reports/latex/*.blg
+reports/latex/*.fdb_latexmk
+reports/latex/*.fls
+reports/latex/*.log
+reports/latex/*.out
+reports/latex/*.toc
+reports/latex/*.synctex.gz

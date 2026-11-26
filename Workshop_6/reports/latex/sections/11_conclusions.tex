@@ -1,0 +1,42 @@
+\section{Conclusions and Future Work}
+\label{sec:conclusions}
+
+This final workshop completed Group~8's semester-long progression from character-level sequence modeling on \texttt{flwrlabs/shakespeare} to clinical dermatoscopic diagnosis on HAM10000 / ISIC~2018 Task~3. Rather than forcing implausible transfers, our systematic audit demonstrated a clear scientific separation between transferable engineering/architectural principles and domain-bound artifacts. Leakage-free entity-grouped splitting (Workshop~1), Pre-LN Transformer blocks combined with post-hoc logit adjustment and portable mixed-precision optimization (Workshop~2), 2D residual VAE anomaly scoring with Free Bits and cyclical KL annealing (Workshop~4), and FP32 WGAN-GP gradient penalties (Workshop~5) all transferred productively into a unified, reproducible medical imaging pipeline. Equally valuable, our empirical negative controls and rejections documented why discrete character embeddings, causal masks, lexical n-gram extractors, Gumbel-Softmax discretization, frozen Shakespeare attention blocks, and the Workshop~3 lexical DQN agent fail or lack structural validity on static diagnostic imaging.
+
+Across our controlled ablations on the untouched lesion-grouped test split, \WSixBestModel{} achieved \WSixBestBalAcc{} 7-class balanced accuracy, \WSixBestMalAUC{} malignancy AUC-ROC, \WSixBestMalPRAUC{} PR-AUC, and \WSixBestSensScr{} sensitivity / \WSixBestSpecScr{} specificity at the validation-selected primary-care screening threshold, with positive net clinical benefit on Decision Curve Analysis and quantified anatomical alignment against Tschandl lesion masks (\WSixXaiLesionEnergy{} saliency energy within lesions, \WSixXaiPointingAcc{} pointing-game accuracy). Our comparative analyses confirmed Raghu et al.'s~\cite{Raghu2019transfusion} core insight: visual domain similarity (ImageNet-pretrained convolutional features paired with modality-specific dermoscopy preprocessing and class-balanced objectives) drives substantially larger medical gains than cross-modal weight initialization from text, while Workshop~5-style synthetic GAN augmentation at low resolution offers limited benefit over principled loss balancing and dihedral augmentations.
+
+\subsection{Limitations and Path to Real-World Clinical Deployment}
+Four concrete limitations bound the conclusions of this study: (1)~evaluation was conducted on a single retrospective benchmark lacking Fitzpatrick skin phototype annotations~\cite{Daneshjou2022disparities}, preventing claims of equity on darker skin tones; (2)~classification operated solely on single-frame dermoscopy without integrating tabular clinical metadata (\texttt{age}, \texttt{sex}, \texttt{localization}, lesion evolution), which dermatologists routinely exploit; (3)~qualitative interpretability review was verified against ground-truth lesion segmentation masks rather than formal adjudication by board-certified dermatologists; and (4)~our W4 VAE and W5 cWGAN-GP models operated at $64\times 64$ resolution for computational tractability, limiting fine vascular and reticular fidelity.
+
+To bridge the gap toward clinical deployment, future work should pursue four targeted steps: (1)~external validation on multi-ethnic prospective cohorts including Fitzpatrick IV--VI lesions (e.g., Diverse Dermatology Images~\cite{Daneshjou2022disparities} and ISIC~2020/2024 multi-center test sets); (2)~multimodal fusion combining our hybrid vision backbone with structured clinical history via calibrated cross-attention; (3)~concept-based explainability predicting explicit dermoscopic criteria (pigment network, streaks, blue-white veil, vascular patterns) alongside malignancy probability; and (4)~reformulating Workshop~3's reinforcement learning paradigm strictly where sequential decision dynamics genuinely exist—such as longitudinal digital dermoscopic follow-up scheduling or active lesion-biopsy selection under uncertainty—coupled with a formal reader study supporting an FDA De~Novo / 510(k) submission with a Predetermined Change Control Plan.
+
+\subsection{Reproducibility, Open-Science Statements, and TRIPOD+AI Checklist}
+\paragraph{Data and Code Availability.}
+All medical experiments use the publicly accessible HAM10000 dataset hosted on Harvard Dataverse (\url{https://doi.org/10.7910/DVN/DBW86T}, CC~BY-NC~4.0). All source code, lesion-grouped split manifests (\texttt{Workshop\_6/data/splits.json}), unit tests (\texttt{Workshop\_6/tests/}), trained medical checkpoints (\texttt{Workshop\_6/checkpoints/*.pt}, serialized strictly as pure tensors loaded with \texttt{weights\_only=True}), and evaluation scripts are archived in the course GitHub repository under tag \texttt{v1.0-medical-final}. Exact single-command reproduction instructions are documented in \texttt{Workshop\_6/README.md}.
+
+\paragraph{Compute and Software Provenance.}
+Models were developed in Python~3.14 with PyTorch~2.x, \texttt{torchvision}, \texttt{scikit-learn}, \texttt{opencv-python-headless}, and \texttt{pydicom~3.0.2}, targeting an AMD Radeon RX~9060~XT (16~GB VRAM, ROCm \texttt{gfx1200}, BF16 mixed precision) via \texttt{shared/device.py}, with full deterministic seeding (\texttt{SEED=42}) and automated unit/invariant verification via \texttt{pytest} and \texttt{ruff}. Total training compute for the complete 4-ablation suite plus W4 VAE and W5 cWGAN-GP requires approximately 45--60~minutes on a single RX~9060~XT GPU ($\le 4.5$~GB peak VRAM).
+
+\paragraph{Ethics and AI-Tool Disclosure.}
+This study analyzed exclusively de-identified public retrospective dermatoscopic images and involved no prospective human-subject recruitment or clinical intervention; institutional IRB review was therefore not required. No autonomous clinical decisions were made on real patients. Generative AI coding and editorial assistants were used under human supervision for software scaffolding, code review, and LaTeX formatting; all experimental pipelines, unit tests, bibliographic DOIs, and clinical claims were independently executed and verified against primary sources and persisted repository artifacts. Table~\ref{tab:tripod_checklist} summarizes compliance with key TRIPOD+AI~\cite{Collins2024tripod} and STARD~2015~\cite{Bossuyt2015stard} reporting items.
+
+\begin{table}[htbp]
+\centering
+\caption{\textbf{Summary TRIPOD+AI~\cite{Collins2024tripod} and Reproducibility Reporting Checklist for Workshop~6.}}
+\label{tab:tripod_checklist}
+\footnotesize
+\begin{tabular}{p{3.6cm}p{1.6cm}p{9.0cm}}
+\toprule
+\textbf{Checklist Item} & \textbf{Status} & \textbf{Implementation / Evidence in Workshop~6} \\
+\midrule
+Entity-grouped splits (no leakage) & Yes & \texttt{GroupShuffleSplit} by \texttt{lesion\_id} (70/15/15); unit-tested for 0 overlap. \\
+Train-only preprocessing fit & Yes & RGB mean/std, temperature $T$, logit-adj $\tau$, and 3 thresholds fitted strictly on train/val. \\
+Clinical metrics \& calibration & Yes & Sens, Spec, PPV, NPV, AUC-ROC, PR-AUC, ECE, Brier, DCA Net Benefit + 95\% bootstrap CIs. \\
+Subgroup fairness audit & Yes & Disaggregated across \texttt{age\_group}, \texttt{sex}, \texttt{localization\_group}, \texttt{dx\_type} (Table~\ref{tab:fairness}). \\
+Visual XAI \& failure modes & Yes & Grad-CAM + Attention Rollout validated vs.\ Tschandl masks + 5 test failure modes. \\
+Prospective / external Fitzpatrick V--VI validation & No & Honestly disclosed limitation; primary item in Future Work and FDA pre-submission plan. \\
+Clinician reader validation & No & Public 511-reader benchmark~\cite{Tschandl2019comparison} cited; local dermatologist review deferred to future work. \\
+Safe checkpoint serialization & Yes & Pure tensor \texttt{state\_dict} loaded strictly with \texttt{weights\_only=True} + JSON metadata. \\
+\bottomrule
+\end{tabular}
+\end{table}

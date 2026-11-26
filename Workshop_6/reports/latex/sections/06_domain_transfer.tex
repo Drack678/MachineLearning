@@ -1,0 +1,64 @@
+\section{Medical Domain Transfer}
+\label{sec:domain_transfer}
+
+\subsection{Transfer Viability Audit: Positive Transfers vs.\ Honest Negative Results}
+Cross-domain adaptation from symbolic 1D text to continuous 2D medical images requires distinguishing invariant algorithmic principles from domain-bound representations. Figure~\ref{fig:transfer_architecture} and Table~\ref{tab:transfer_audit} present our complete component-level transfer audit across Workshops~1--5 and \texttt{shared/}.
+
+\input{figures/tikz_transfer_arch.tex}
+
+\begin{table}[htbp]
+\centering
+\caption{\textbf{Honest transfer viability matrix from Workshops 1--5 to HAM10000 medical imaging.} Components are categorized strictly by technical viability rather than forced reuse.}
+\label{tab:transfer_audit}
+\footnotesize
+\begin{tabular}{p{1.6cm}p{3.4cm}p{2.3cm}p{6.8cm}}
+\toprule
+\textbf{Source} & \textbf{Component} & \textbf{Verdict / Strategy} & \textbf{Technical Justification} \\
+\midrule
+\texttt{shared/} & \texttt{device.py}, \texttt{checkpoints.py}, \texttt{metrics.py}, cosine warmup & \textbf{Direct Reuse} (High value) & Domain-agnostic engineering: ROCm RX 9060 XT BF16/FP32 AMP, \texttt{clip\_grad\_norm\_safe}, \texttt{weights\_only=True}, ECE and bootstrap CIs. \\
+W1 & \texttt{GroupShuffleSplit} + SHA-256 provenance & \textbf{Methodological} (High value) & Maps 1:1 from \texttt{character\_id} to \texttt{lesion\_id}, preventing multi-image lesion leakage across train/val/test partitions. \\
+W2 & Pre-LN Transformer blocks + AdamW + Logit Adjustment & \textbf{Hybrid + Arch.\ Mod.} (High value) & \texttt{MedHybridTransformer} pairs a 4-stage \texttt{ConvStem2D} ($14\times 14$ tokens) with W2's exact 4-layer Pre-LN bidirectional blocks and validation-tuned logit adjustment. \\
+W2 (Weights) & Frozen Shakespeare \texttt{blocks} weights & \textbf{Negative Control} (Tested in A1) & Tests whether 1D causal text self-attention weights offer any feature reuse on 2D dermoscopy; expected neutral-to-negative transfer~\cite{Raghu2019transfusion}. \\
+W4 & \texttt{ResConv} (\texttt{GroupNorm}+GELU), FiLM, Free Bits, Cyclical KL & \textbf{Arch.\ Mod.\ 1D$\to$2D} (Medium-High) & Migrated to \texttt{MedConvVAE2D} with continuous L1+MSE loss, trained on benign lesions to evaluate unsupervised malignancy/OOD scoring. \\
+W5 & FP32 WGAN-GP + \texttt{Critic} + filtered aug.\ protocol & \textbf{Arch.\ Mod.\ 1D$\to$2D} (Ablation 4) & Adapted to class-conditional 64$\times$64 \texttt{MedCondWGANGP2D} (continuous \texttt{tanh} output) to test rare-class synthetic augmentation. \\
+\midrule
+W1 (Text) & Char n-gram TF-IDF, morphological rules, ComplementNB & \textbf{Rejected} (No transfer) & Discrete ASCII substring extractors have no spatial pixel counterpart. \\
+W2 (Front) & \texttt{token\_embedding(76,256)}, causal mask, BPC & \textbf{Rejected} (No transfer) & Symbolic 1D vocabulary and left-to-right causality contradict continuous 2D spatial symmetry. \\
+W3 & \texttt{TextGenerationEnv} \& \texttt{Double+Dueling DQN} & \textbf{Rejected} (Honest Negative) & Static lesion diagnosis is single-step supervised risk estimation, not a lexical MDP with per-step dictionary rewards. \\
+W5 (Discr.) & Gumbel-Softmax ST \& n-gram TV metrics & \textbf{Rejected} (No transfer) & Straight-through categorical discretization destroys continuous pixel gradients; image quality requires visual/distributional metrics. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Dataset Selection, Leakage-Free Splitting, and Modality Preprocessing}
+We selected the public \textbf{HAM10000 / ISIC~2018 Task~3} repository~\cite{Tschandl2018dataset} via official Harvard Dataverse API access (\texttt{doi:10.7910/DVN/DBW86T}, verified MD5 and local SHA-256 checksums) for four clinical and experimental reasons: (1)~open programmatic reproducibility without manual gatekeeping; (2)~severe real-world diagnostic imbalance (58.3:1 across 7 categories, with 19.5\% malignant/premalignant lesions: \texttt{mel}, \texttt{bcc}, \texttt{akiec}); (3)~linked clinical metadata (\texttt{lesion\_id}, \texttt{age}, \texttt{sex}, \texttt{localization}, \texttt{dx\_type}) enabling genuine subgroup fairness and annotation-quality audits rather than artificial proxies; and (4)~availability of official Tschandl pixel-level lesion segmentation masks for objective anatomical validation of saliency maps.
+
+Because HAM10000 contains 10,015 images acquired from 7,470 unique pigmented lesions (multiple photographs or magnifications per lesion), random image-level splitting leaks near-duplicate lesions across splits and inflates test performance. Transferring Workshop~1's grouped-splitting invariant, \texttt{src/medical\_preprocessing.py} applies two-stage \texttt{GroupShuffleSplit} strictly on \texttt{lesion\_id} (\texttt{SEED=42}) to yield disjoint 70/15/15 partitions (\WSixTrainImgs{} train images / \WSixTrainLesions{} lesions, \WSixValImgs{} val images / \WSixValLesions{} lesions, and \WSixTestImgs{} test images / \WSixTestLesions{} lesions) verified programmatically for zero lesion or image overlap. Channel normalization means and standard deviations are estimated exclusively on the training partition.
+
+To handle modality-specific dermoscopy artifacts, our preprocessing pipeline executes three sequential transformations (togglable as a unit in Ablation~2):
+\begin{enumerate}
+  \item \textbf{Circular Vignette Cropping:} Thresholds luminance ($I > 12$) to locate and trim black optical dermoscope borders, guarded against over-cropping ($<55\%$ of original span).
+  \item \textbf{DullRazor Hair Artifact Removal~\cite{Lee1997dullrazor}:} Computes a $17\times 17$ cross-kernel morphological Black-Hat transform on grayscale luminance, thresholds thin dark hair strands, applies a 15\% pixel-area safety cap so darkly pigmented melanomas are never erased, and reconstructs occluded pixels via Telea fast marching inpainting (radius~3).
+  \item \textbf{Shades of Gray Color Constancy~\cite{Finlayson2004shades}:} Estimates illuminant color via the $L_6$ Minkowski norm per RGB channel with bounded gain $[0.75, 1.35]$ to harmonize color casts across Vienna and Queensland dermatoscopes while preserving diagnostic pigmentation contrast.
+\end{enumerate}
+
+Training augmentations strictly respect dermatoscopic clinical validity: random horizontal and vertical flips, exact $90^\circ$ rotations ($D_4$ dihedral symmetry), mild affine perturbation ($\pm 20^\circ$, $\pm 5\%$ shift, $[0.90, 1.10]$ scale), and bounded brightness/contrast/saturation jitter ($\pm 0.12 / 0.12 / 0.08$) with \textbf{zero hue distortion} (\texttt{hue=0.0}). To address the 58.3:1 class imbalance, we evaluate three strategies in Ablation~3: standard cross-entropy (unweighted control), Class-Balanced Focal Loss combining effective-number weights~\cite{Cui2019class} ($\beta=0.999$) with focal modulation ($\gamma=2.0$, label smoothing $0.05$), and calibrated cross-entropy paired with Workshop~2's post-hoc logit adjustment~\cite{Menon2020long} tuned strictly on validation.
+
+Although HAM10000 is distributed in JPEG format, clinical hospital deployment relies on DICOM Visible Light Photography objects. Accordingly, \texttt{src/medical\_preprocessing.py} also implements a \texttt{pydicom 3.0.2} interoperability layer enforcing a strict non-PHI technical tag allowlist, standardized Modality/VOI LUT decoding, and a recursive HIPAA Safe Harbor metadata and private-element audit verified by automated unit tests on synthetic DICOM fixtures.
+
+\begin{figure}[htbp]
+\centering
+\safeincludegraphics[0.95\textwidth]{../figures/preprocessing_examples.png}{Before/after dermoscopy preprocessing examples (vignette crop, DullRazor hair removal, Shades of Gray color constancy).}
+\caption{\textbf{Modality-specific dermoscopy preprocessing stages across representative HAM10000 lesions.} Vignette cropping eliminates black optical rims, DullRazor attenuates occluding hair strands without erasing lesion interiors, and Shades of Gray ($p=6$) normalizes cross-clinic illuminant shifts.}
+\label{fig:preprocessing_examples}
+\end{figure}
+
+\subsection{Adapted Architectures and Training Protocol}
+\paragraph{Hybrid CNN-Transformer (\texttt{MedHybridTransformer}, W2 Adaptation).}
+Pure Vision Transformers~\cite{Dosovitskiy2020image} trained on $\sim 7,000$ images typically overfit due to weak local spatial inductive bias. We therefore design a hybrid modification: a 4-stage strided convolutional stem (\texttt{ConvStem2D}: channels $3 \to 32 \to 64 \to 128 \to 256$ with \texttt{GroupNorm} and GELU) maps $224\times 224$ images into a $14\times 14$ feature map (196 patch tokens of dimension $d_{\text{model}}=256$), prepends a learnable \texttt{[CLS]} token and 2D positional embeddings, and feeds the sequence into the \textbf{exact 4-layer Pre-LN \texttt{TransformerEncoder} block architecture} of Workshop~2 (\texttt{n\_heads}=4, \texttt{dim\_feedforward}=1,024, GELU, bidirectional self-attention without causal mask), followed by a LayerNorm + Dropout + Linear 7-class head ($\sim 3.70$M parameters, checkpoint size $\sim 15$~MB). Because state-dictionary keys under \texttt{blocks.*} match \texttt{CharTransformer.blocks} verbatim, we compare three controlled regimes in Ablation~1: (i)~\texttt{a1\_med\_hybrid\_scratch} (random initialization), (ii)~\texttt{a1\_med\_hybrid\_w2\_frozen} (Shakespeare block weights loaded and frozen—honest negative feature-reuse test), and (iii)~\texttt{a1\_med\_hybrid\_w2\_finetune} (Shakespeare block weights fine-tuned at $0.2\times$ differential learning rate).
+
+\paragraph{Visual Transfer Benchmark (\texttt{ResNet18Medical}).}
+To test Raghu et al.'s~\cite{Raghu2019transfusion} findings directly against our text-to-medical adaptation, we train ImageNet-pretrained \texttt{ResNet-18}~\cite{He2016deep} ($\sim 11.2$M parameters, checkpoint $\sim 44$~MB) both via full fine-tuning (\texttt{a1\_resnet18\_imagenet\_finetune}) and from scratch (\texttt{a1\_resnet18\_scratch}) under identical splits, preprocessing, loss functions, and hardware schedules.
+
+\paragraph{Unsupervised Anomaly Scoring (\texttt{MedConvVAE2D}, W4 Adaptation) and Rare-Class Synthesis (\texttt{MedCondWGANGP2D}, W5 Adaptation).}
+Translating Workshop~4's dilated residual blocks, 2D FiLM conditioning, Free Bits ($0.25$), and 4-cycle cyclical KL annealing to continuous $64\times 64$ RGB images (with L1+MSE loss replacing discrete token cross-entropy), \texttt{MedConvVAE2D} trains exclusively on benign training lesions (\texttt{nv}, \texttt{bkl}) and scores test images via reconstruction error plus KL divergence. Translating Workshop~5 to 2D while discarding Gumbel-Softmax, \texttt{MedCondWGANGP2D} employs a class-conditional residual generator (\texttt{tanh} output) and a \texttt{GroupNorm} projection critic with FP32 gradient penalty ($\lambda_{\mathrm{GP}}=10$, 5~critic steps) to synthesize 200 classifier-filtered $64\times 64$ images per rare class (\texttt{akiec}, \texttt{bcc}, \texttt{df}, \texttt{mel}, \texttt{vasc}) for Ablation~4. All models train deterministically (\texttt{SEED=42}) via \texttt{shared/device.py} on an AMD Radeon RX~9060~XT (ROCm, BF16 mixed precision, \texttt{use\_foreach=False}, \texttt{clip\_grad\_norm\_safe}), selecting checkpoints by composite validation score $0.5 \cdot \text{BalancedAcc} + 0.5 \cdot \text{Malignant PR-AUC}$ and fitting post-hoc Temperature Scaling~\cite{Guo2017calibration} and clinical operating thresholds strictly on validation.

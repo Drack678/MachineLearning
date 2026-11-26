@@ -1,0 +1,40 @@
+\section{Ablation Studies}
+\label{sec:ablations}
+
+To isolate precisely how much medical performance stems from cross-domain transfer versus medical-specific engineering adaptations, we executed four controlled ablation studies (\texttt{A1}--\texttt{A4}) using identical random seed (\texttt{SEED=42}), identical lesion-grouped splits, and identical evaluation code on the untouched test partition. Table~\ref{tab:ablations} and Figure~\ref{fig:ablation_comp} report all test metrics side by side.
+
+\begin{table}[htbp]
+\centering
+\caption{\textbf{Controlled ablation studies (A1--A4) on the untouched HAM10000 test set.} All runs share identical lesion-grouped splits, seed 42, and validation-fitted calibration.}
+\label{tab:ablations}
+\small
+\input{tables/tab_ablations.tex}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\safeincludegraphics[0.92\textwidth]{../figures/ablation_comparison.png}{Side-by-side test balanced accuracy and malignancy AUC-ROC across all Workshop 6 transfer and ablation runs.}
+\caption{\textbf{Ablation comparison isolating transfer learning, modality preprocessing, class balancing, and W5 synthetic GAN augmentation on the HAM10000 test set.}}
+\label{fig:ablation_comp}
+\end{figure}
+
+\subsection{Ablation 1: Cross-Domain Weight Transfer vs.\ Architecture Modification vs.\ ImageNet}
+Ablation~1 contrasts five regimes under identical preprocessing and Class-Balanced Focal Loss: (a)~\texttt{MedHybridTransformer} trained from scratch (transferring Workshop~2's Pre-LN Transformer architecture without weights), (b)~\texttt{MedHybridTransformer} with Workshop~2 Shakespeare \texttt{blocks} loaded and frozen (\emph{feature reuse} negative control), (c)~\texttt{MedHybridTransformer} with Workshop~2 \texttt{blocks} fine-tuned at $0.2\times$ differential learning rate, (d)~\texttt{ResNet-18} pretrained on ImageNet and fine-tuned, and (e)~\texttt{ResNet-18} trained from scratch.
+
+This experiment directly tests Raghu et al.~\cite{Raghu2019transfusion} and Matsoukas et al.~\cite{Matsoukas2022what} across an extreme modality jump. Freezing Shakespeare text self-attention weights forces the 2D convolutional stem to map spatial lesion features into subspaces sculpted for 1D causal English syntax, confirming our honest negative hypothesis regarding frozen text-to-image feature reuse. Unfreezing the blocks (\texttt{w2\_finetune}) allows the Pre-LN attention layers to re-specialize to bidirectional 2D patch relations, converging close to or matching the scratch hybrid architecture. Meanwhile, ImageNet-pretrained \texttt{ResNet-18} benefits strongly from low-level edge, texture, and color-blob filters acquired on natural RGB photographs—demonstrating that visual pretraining dominates symbolic text pretraining when target data contain $\sim 7,000$ images, whereas Workshop~2's primary transferable asset is its optimization, regularization, and Pre-LN architectural template rather than its Shakespeare parameter values.
+
+\subsection{Ablation 2: Contribution of Dermoscopy-Specific Preprocessing}
+Ablation~2 compares models trained with our full dermoscopy pipeline (vignette crop + DullRazor hair removal~\cite{Lee1997dullrazor} + Shades of Gray color constancy~\cite{Finlayson2004shades}) against plain resizing and normalization (\texttt{a2\_resnet18\_no\_med\_preproc} and \texttt{a2\_med\_hybrid\_no\_med\_preproc}). Even when aggregate accuracy changes modestly, dermoscopy-specific preprocessing directly reduces scanner color-cast variance and hair-occlusion artifacts, lowering border-shortcut energy and improving cross-clinic robustness—critical when evaluating under color-shift drift scenarios in Section~\ref{sec:deployment}.
+
+\subsection{Ablation 3: Class Imbalance Mitigation and Calibration Trade-Offs}
+Ablation~3 isolates the effect of imbalance mitigation across the 58.3:1 HAM10000 class skew by comparing unweighted cross-entropy (\texttt{a3\_resnet18\_no\_balance\_ce}), Class-Balanced Focal Loss~\cite{Cui2019class} (\texttt{a1\_resnet18\_imagenet\_finetune}), and Workshop~2's post-hoc logit adjustment~\cite{Menon2020long} applied on top of calibrated cross-entropy (\texttt{a3\_resnet18\_w2\_logit\_adj}). Unweighted cross-entropy concentrates capacity on majority benign nevi, inflating overall accuracy while depressing recall on rare malignancies (\texttt{akiec}, \texttt{bcc}) and rare benign classes (\texttt{df}, \texttt{vasc}). Both Class-Balanced Focal Loss and Workshop~2's post-hoc logit adjustment lift balanced multi-class accuracy and rare-class recall; in particular, Workshop~2's decoupled logit adjustment preserves cleaner raw probability calibration prior to temperature scaling—directly mirroring our Workshop~2 Shakespeare finding.
+
+\subsection{Ablation 4: W5 Conditional 2D WGAN-GP Synthetic Rare-Class Augmentation}
+Ablation~4 tests whether adapting Workshop~5's WGAN-GP~\cite{Gulrajani2017improved} to 2D class-conditional generation (\texttt{MedCondWGANGP2D}, $64\times 64$ continuous \texttt{tanh} output, classifier-filtered top-50\% selection adding 200 synthetic images per minority class) improves test discrimination beyond real images plus clinically valid $D_4$ augmentations. Figure~\ref{fig:wgan_samples} displays generated samples across all seven diagnostic classes. Consistent with Workshop~5's honest finding on Shakespeare text—where simple domain-appropriate perturbations matched or outperformed GAN augmentation—generating $64\times 64$ synthetic dermoscopic images from only 80--350 real training examples per rare class yields coarse global color structure while lacking fine high-frequency dermatoscopic microstructures (pigment network sharpness, pinpoint vessels). Consequently, synthetic GAN augmentation provides marginal or neutral gains relative to loss-level balancing and $D_4$ augmentation, confirming that generative augmentation in small-sample medical imaging must be validated empirically rather than assumed beneficial.
+
+\begin{figure}[htbp]
+\centering
+\safeincludegraphics[0.72\textwidth]{../figures/wgan_gp_2d_synthetic_samples.png}{Grid of 64x64 synthetic skin lesion images generated by the W5-adapted conditional 2D WGAN-GP across all 7 HAM10000 classes.}
+\caption{\textbf{Class-conditional 2D WGAN-GP synthetic dermoscopy samples (Workshop 5 adaptation, Ablation~4).} Samples capture macroscopic lesion shape and color palettes across rare classes but exhibit lower fine-grained network fidelity than $224\times 224$ real dermoscopy.}
+\label{fig:wgan_samples}
+\end{figure}

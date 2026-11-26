@@ -1,0 +1,27 @@
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=0.55cm and 0.65cm,
+  stepbox/.style={rectangle, rounded corners=3pt, draw=OkabeBlue, fill=BoxBg, thick, text width=2.55cm, align=center, minimum height=1.25cm, font=\footnotesize},
+  gate/.style={diamond, aspect=2.1, draw=OkabeOrange, fill=orange!8, thick, align=center, font=\footnotesize, inner sep=1pt},
+  clinic/.style={rectangle, rounded corners=3pt, draw=OkabeGreen, fill=teal!7, thick, text width=2.7cm, align=center, minimum height=1.25cm, font=\footnotesize},
+  arrow/.style={-{Stealth[length=2.2mm]}, thick, color=OkabeGray}
+]
+\node[stepbox] (acq) {\textbf{1. Dermoscopy Acquisition}\\ Polarized VL-DICOM / JPEG};
+\node[stepbox, right=of acq] (phi) {\textbf{2. PHI Audit \& Preproc}\\ pydicom Allowlist\\ DullRazor + SoG};
+\node[stepbox, right=of phi] (inf) {\textbf{3. Calibrated Inference}\\ $P(\text{mal})$ + Temp. Scale\\ + Grad-CAM / Rollout};
+\node[gate, right=0.75cm of inf] (thr) {\textbf{$P(\text{mal}) \ge \tau_{\text{scr}}$?}};
+\node[clinic, above right=0.45cm and 0.7cm of thr] (high) {\textbf{Urgent Dermatology Referral}\\ Biopsy / Excision Review};
+\node[clinic, below right=0.45cm and 0.7cm of thr] (low) {\textbf{Routine Follow-up}\\ Clinician ABCDE Override Allowed};
+
+\draw[arrow] (acq) -- (phi);
+\draw[arrow] (phi) -- (inf);
+\draw[arrow] (inf) -- (thr);
+\draw[arrow] (thr.north) |- node[pos=0.72, above, font=\scriptsize]{Yes (Sens $\ge 95\%$)} (high.west);
+\draw[arrow] (thr.south) |- node[pos=0.72, below, font=\scriptsize]{No (High NPV)} (low.west);
+\end{tikzpicture}
+}
+\caption{\textbf{Proposed human-in-the-loop primary-care teledermatology triage workflow.} Calibrated malignancy probabilities operate at a validation-fixed high-sensitivity threshold ($\tau_{\text{scr}}$) paired with Grad-CAM visual explanations, ensuring dermatologists and primary-care physicians retain final diagnostic authority and override capability.}
+\label{fig:clinical_workflow}
+\end{figure}

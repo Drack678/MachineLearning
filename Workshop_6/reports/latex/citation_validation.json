@@ -1,0 +1,60 @@
+{
+  "filepath": "Workshop_6/reports/latex/references.bib",
+  "total_entries": 39,
+  "valid_entries": 39,
+  "errors": [],
+  "warnings": [
+    {
+      "type": "missing_recommended_field",
+      "field": "pages",
+      "severity": "medium",
+      "message": "Entry Rajkomar2018scalable: Missing recommended field \"pages\"",
+      "entry": "Rajkomar2018scalable"
+    },
+    {
+      "type": "missing_recommended_field",
+      "field": "pages",
+      "severity": "medium",
+      "message": "Entry Tschandl2018dataset: Missing recommended field \"pages\"",
+      "entry": "Tschandl2018dataset"
+    },
+    {
+      "type": "missing_recommended_field",
+      "field": "pages",
+      "severity": "medium",
+      "message": "Entry Yang2023medmnist: Missing recommended field \"pages\"",
+      "entry": "Yang2023medmnist"
+    },
+    {
+      "type": "missing_recommended_field",
+      "field": "pages",
+      "severity": "medium",
+      "message": "Entry Daneshjou2022disparities: Missing recommended field \"pages\"",
+      "entry": "Daneshjou2022disparities"
+    },
+    {
+      "type": "missing_recommended_field",
+      "field": "volume",
+      "severity": "medium",
+      "message": "Entry Bossuyt2015stard: Missing recommended field \"volume\"",
+      "entry": "Bossuyt2015stard"
+    },
+    {
+      "type": "missing_recommended_field",
+      "field": "pages",
+      "severity": "medium",
+      "message": "Entry Gerke2020need: Missing recommended field \"pages\"",
+      "entry": "Gerke2020need"
+    }
+  ],
+  "duplicates": [],
+  "venue_standard_checked": null,
+  "min_count_checked": 25,
+  "manuscript_results": {
+    "checked": false,
+    "manuscript_filepath": null,
+    "cited_keys": [],
+    "missing_keys": [],
+    "unused_keys": []
+  }
+}
